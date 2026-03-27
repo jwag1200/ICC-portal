@@ -456,8 +456,9 @@ td{padding:13px 18px;font-size:13px;border-top:1px solid #f2f5fb;color:#5a646a;v
 .copy-cite{background:none;border:1.5px solid #dce6f0;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;color:#aab4bc;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all 0.12s}
 .copy-cite:hover{border-color:#1072ba;color:#1072ba}
 .copy-cite.copied{background:#e8f5d8;color:#3a5a00;border-color:#b8d898}
-@keyframes spin{to{transform:rotate(360deg)}}
 `;
+const SPIN_STYLE = document.createElement("style");
+SPIN_STYLE.textContent = "@keyframes spin { to { transform: rotate(360deg); } }";
 
 function Pill({label,cls}){return <span className={"pill "+(cls||"p-gray")}>{label}</span>;}
 function SBar({label}){return <div className="sbar"><span className="sbar-l">{label}</span><div className="sbar-line"/></div>;}
@@ -1581,7 +1582,6 @@ function CaseDetail({c,onPatch,onBack}){
       )}
     </div>
     </div>
-    </div>
   );
 }
 
@@ -1799,6 +1799,11 @@ export default function ICCPortal(){
   const [cases,setCases]=useState([]);
   const [selectedRef,setSelectedRef]=useState(null);
   const [loaded,setLoaded]=useState(false);
+
+  useEffect(function(){
+    document.head.appendChild(SPIN_STYLE);
+    return function(){ try { document.head.removeChild(SPIN_STYLE); } catch(e){} };
+  },[]);
 
   useEffect(function(){
     // Try API first, fall back to localStorage

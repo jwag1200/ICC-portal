@@ -26,6 +26,22 @@ const EMPTY_FORM = {
   repEmail:"",docLink:"",assignedTo:"",
 };
 
+const CGO_MEMO_EMPTY = {
+  participant:"",role:"",manager:"",planPeriod:"2026 1H",
+  trigger:"",dealDesc:"",dealValue:"",compCalculated:"",
+  resolution:"",payoutImpact:"",effectiveDate:"",
+  policyBasis:"",rationale:"",
+  precedentRef:"",precedentConsistent:"yes",precedentDistinguish:"",
+  eq1:false,eq2:false,eq3:false,eq4:false,
+  repEmail:"",assignedTo:"",
+};
+
+const APPEAL_GROUNDS = [
+  {id:"procedural",label:"Procedural Defect",desc:"The Committee failed to follow a material requirement of the ICC Charter."},
+  {id:"evidence",label:"Material New Evidence",desc:"Evidence that was not available at the time of the ruling and would likely have affected the outcome."},
+  {id:"misapplication",label:"Manifest Misapplication",desc:"The Committee's interpretation is clearly inconsistent with the express terms of the applicable plan."},
+];
+
 const PLAN_REFS = {
   "Deal >= 50% of Rep's Quota": { sections: [
     { source:"2026 1H Incentive Compensation Plan", ref:"Section 5 -- Attainment and Accelerators", text:"If a single deal is equal or greater than 50% of your plan period quota, the Sales Incentive Committee reserves the right to review said deal and determine the equitable treatment of the deal." },
@@ -255,113 +271,164 @@ function downloadDecisionPDF(c) {
   }
 }
 
+const API = "https://icc-portal-api-anh3fnfabvfreabs.centralus-01.azurewebsites.net/api";
+
 const store = {
-  async get(k) { try { const v=localStorage.getItem(k); return v?{value:v}:null; } catch { return null; } },
-  async set(k,v) { try { localStorage.setItem(k,v); } catch {} },
+  async get(k) {
+    try {
+      const res = await fetch(API+"/getCases");
+      if(!res.ok) throw new Error("API error "+res.status);
+      const cases = await res.json();
+      return cases.length > 0 ? {value: JSON.stringify(cases)} : null;
+    } catch(e) {
+      // Fallback to localStorage if API unavailable
+      try { const v=localStorage.getItem(k); return v?{value:v}:null; } catch { return null; }
+    }
+  },
+  async set(k,v) {
+    // set() is now a no-op -- individual saves handled by saveCases
+  },
 };
+
+async function apiCreateCase(c) {
+  try {
+    const res = await fetch(API+"/createCase", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(c)
+    });
+    return res.ok;
+  } catch(e) { return false; }
+}
+
+async function apiUpdateCase(ref, patch) {
+  try {
+    const res = await fetch(API+"/updateCase?ref="+encodeURIComponent(ref), {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(patch)
+    });
+    return res.ok;
+  } catch(e) { return false; }
+}
 
 const STYLES = `
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f7fa}
+body{font-family:'Roboto',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f5fb;color:#5a646a;font-size:14px}
 .app{display:flex;min-height:100vh}
-.sidebar{width:210px;background:#17477e;display:flex;flex-direction:column;flex-shrink:0;position:sticky;top:0;height:100vh}
-.slogo{padding:20px 16px 16px;border-bottom:1px solid rgba(255,255,255,0.1)}
-.slogo-co{font-size:14px;font-weight:600;color:white;letter-spacing:0.1em}
-.slogo-sub{font-size:10px;color:#b9e0f7;margin-top:3px;line-height:1.4}
-.nav-btn{width:100%;display:flex;align-items:center;gap:8px;padding:10px 16px;background:none;border:none;cursor:pointer;font-size:12px;color:rgba(255,255,255,0.6);text-align:left;border-left:2px solid transparent;transition:all 0.1s;font-family:inherit}
-.nav-btn.active{background:rgba(255,255,255,0.1);color:white;font-weight:500;border-left-color:#fdb73e}
-.nav-badge{background:#fdb73e;color:#0f2d52;border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:auto}
-.main{flex:1;overflow-y:auto}
-.page{padding:28px 32px;max-width:960px}
-.page-title{font-size:22px;font-weight:300;color:#17477e;margin-bottom:4px}
-.page-sub{font-size:12px;color:#8a969c;margin-bottom:22px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
-.stat{background:white;border-radius:8px;padding:16px;border-top:3px solid #1072ba;box-shadow:0 1px 3px rgba(0,0,0,0.06)}
-.stat-n{font-size:26px;font-weight:300;color:#17477e;margin-bottom:2px}
-.stat-l{font-size:10px;color:#8a969c;text-transform:uppercase;letter-spacing:0.07em}
-.card{background:white;border-radius:8px;border:1px solid #e8edf2;overflow:hidden;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.card-hd{padding:12px 16px;border-bottom:1px solid #e8edf2;display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:500;color:#17477e}
+.sidebar{width:248px;background:white;border-right:1px solid #dce6f0;display:flex;flex-direction:column;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto}
+.slogo{padding:24px 22px 20px;border-bottom:2px solid #e8f4fc}
+.slogo-img{height:26px;margin-bottom:10px;display:block}
+.slogo-pill{display:inline-flex;align-items:center;gap:6px;background:#e8f4fc;border-radius:20px;padding:5px 12px;margin-top:8px}
+.slogo-dot{width:7px;height:7px;border-radius:50%;background:#1072ba;flex-shrink:0}
+.slogo-sub{font-size:11px;font-weight:700;color:#1072ba;letter-spacing:0.04em}
+.nav-section{padding:14px 22px 4px;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:0.12em;color:#c8d0d8}
+.nav-btn{width:100%;display:flex;align-items:center;gap:12px;padding:11px 22px;background:none;border:none;cursor:pointer;font-size:13px;color:#5a646a;text-align:left;border-left:3px solid transparent;transition:all 0.12s;font-family:inherit;font-weight:400}
+.nav-btn:hover{background:#f4f8fc;color:#17477e}
+.nav-btn.active{background:#e8f4fc;color:#1072ba;font-weight:700;border-left-color:#1072ba}
+.nav-icon{width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:15px;opacity:0.5;flex-shrink:0}
+.nav-btn.active .nav-icon{opacity:1}
+.nav-badge{margin-left:auto;background:#1072ba;color:white;border-radius:12px;padding:2px 8px;font-size:10px;font-weight:700}
+.sfooter{padding:16px 22px;border-top:1px solid #edf2f8;font-size:11px;color:#c8d0d8;line-height:1.8;margin-top:auto}
+.main{flex:1;overflow-y:auto;min-width:0}
+.page-header{background:white;border-bottom:1px solid #dce6f0;padding:20px 28px;display:flex;align-items:center;justify-content:space-between}
+.page-title{font-size:22px;font-weight:300;color:#17477e;letter-spacing:-0.02em;line-height:1.2;margin-bottom:0}
+.page-sub{font-size:13px;color:#aab4bc;margin-top:3px;margin-bottom:0}
+.page-header-btns{display:flex;gap:10px;align-items:center}
+.page{padding:20px 28px 28px;max-width:1000px}
+.alert-strip{background:linear-gradient(90deg,#fff3e8,#fef9f0);border-bottom:1px solid #fde5b8;padding:10px 28px;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a5200;font-weight:500}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+.stat{background:white;border-radius:10px;padding:20px 22px;border:1px solid #dce6f0;position:relative;overflow:hidden;transition:box-shadow 0.15s}
+.stat:hover{box-shadow:0 4px 16px rgba(23,71,126,0.1)}
+.stat-accent{position:absolute;top:0;left:0;right:0;height:3px}
+.stat-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px;margin-bottom:12px}
+.stat-n{font-size:34px;font-weight:300;color:#17477e;line-height:1;letter-spacing:-0.02em}
+.stat-l{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#aab4bc;margin-top:4px}
+.stat-trend{font-size:11px;font-weight:700;margin-top:8px}
+.card{background:white;border-radius:10px;border:1px solid #dce6f0;overflow:hidden;margin-bottom:16px}
+.card-hd{padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #edf2f8}
+.card-title{font-size:14px;font-weight:700;color:#17477e}
+.card-sub{font-size:12px;color:#aab4bc;margin-top:1px}
 .card-hd-btns{display:flex;gap:8px;align-items:center}
 table{width:100%;border-collapse:collapse}
-th{padding:8px 14px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#8a969c;text-align:left;background:#f8fafc}
-td{padding:10px 14px;font-size:12px;color:#1a2530;border-top:1px solid #f0f4f8}
+th{padding:10px 18px;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:0.1em;color:#aab4bc;text-align:left;background:#fafbfe}
+td{padding:13px 18px;font-size:13px;border-top:1px solid #f2f5fb;color:#5a646a;vertical-align:middle}
 .trow{cursor:pointer}
-.trow:hover td{background:#f4f7fa}
-.pill{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase}
-.p-blue{background:#1072ba15;color:#1072ba;border:1px solid #1072ba30}
-.p-gold{background:#fdb73e18;color:#8a5200;border:1px solid #fdb73e50}
-.p-green{background:#8bad4418;color:#3a5a00;border:1px solid #8bad4440}
-.p-gray{background:#f0f4f8;color:#5a646a;border:1px solid #d0d8e0}
-.p-navy{background:#17477e15;color:#17477e;border:1px solid #17477e30}
-.p-red{background:#e24b4a15;color:#c0392b;border:1px solid #e24b4a30}
-.p-purple{background:#9b59b615;color:#6c3483;border:1px solid #9b59b630}
-.dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:5px}
-.btn{padding:7px 14px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid #d0d8e0;background:transparent;color:#1a2530;transition:all 0.1s;font-family:inherit}
-.btn:hover{background:#f4f7fa}
+.trow:hover td{background:#f7fafd}
+.pill{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+.p-blue{background:#ddeeff;color:#1060a0}
+.p-gold{background:#fef0cc;color:#8a5200}
+.p-green{background:#e8f5d8;color:#3a5a00}
+.p-gray{background:#f0f4f8;color:#5a646a}
+.p-navy{background:#e4ecf6;color:#17477e}
+.p-red{background:#fce8e8;color:#b02020}
+.p-purple{background:#f0e8f8;color:#5a2090}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle;flex-shrink:0}
+.btn{padding:9px 18px;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;border:1.5px solid #dce6f0;background:white;color:#5a646a;transition:all 0.12s;font-family:inherit;letter-spacing:0.02em}
+.btn:hover{border-color:#1072ba;color:#1072ba}
 .btn-p{background:#1072ba;color:white;border-color:#1072ba}
-.btn-p:hover{background:#0d5fa0}
+.btn-p:hover{background:#0d5fa0;border-color:#0d5fa0}
 .btn-ok{background:#8bad44;color:white;border-color:#8bad44}
 .btn-ok:hover{background:#7a9d3a}
-.btn-danger{background:#e24b4a15;color:#c0392b;border-color:#e24b4a40}
-.btn-danger:hover{background:#e24b4a25}
-.btn-sm{padding:5px 11px;font-size:11px}
+.btn-danger{background:#fce8e8;color:#b02020;border-color:#f0b8b8}
+.btn-danger:hover{background:#f0d0d0}
+.btn-sm{padding:6px 14px;font-size:12px}
 .btn:disabled{opacity:0.4;cursor:not-allowed}
-.lbl{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#5a646a;margin-bottom:5px}
-.inp,.sel,.ta{width:100%;padding:8px 10px;border:1px solid #d0d8e0;border-radius:6px;font-size:12px;color:#1a2530;background:white;font-family:inherit;outline:none;transition:border 0.1s}
+.lbl{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#aab4bc;margin-bottom:5px}
+.inp,.sel,.ta{width:100%;padding:9px 12px;border:1.5px solid #dce6f0;border-radius:6px;font-size:13px;color:#17477e;background:white;font-family:inherit;outline:none;transition:border 0.12s}
 .inp:focus,.sel:focus,.ta:focus{border-color:#1072ba}
-.fg{margin-bottom:14px}
+.fg{margin-bottom:16px}
 .fr{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
-.sbar{display:flex;align-items:center;gap:10px;margin:18px 0 12px}
-.sbar-l{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#17477e;white-space:nowrap}
-.sbar-line{flex:1;height:1px;background:#e8edf2}
-.cob{border-left:3px solid #1072ba;background:#1072ba08;padding:10px 12px;border-radius:0 6px 6px 0;margin-bottom:14px;font-size:12px;color:#5a646a;line-height:1.6}
-.cob-warn{border-color:#fdb73e;background:#fdb73e08}
-.cob-ok{border-color:#8bad44;background:#8bad4408}
-.cob-err{border-color:#c0392b;background:#c0392b08}
-.cob-gold{border-color:#fdb73e;background:#fdb73e08}
-.cob-purple{border-color:#9b59b6;background:#9b59b608}
-.tb{padding:5px 12px;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid #d0d8e0;background:transparent;color:#8a969c;font-family:inherit}
-.tb.t1a{background:#8bad4415;color:#3a5a00;border-color:#8bad44}
-.tb.t2a{background:#fdb73e15;color:#8a5200;border-color:#fdb73e}
-.tb.t3a{background:#1072ba15;color:#1072ba;border-color:#1072ba}
-.tabs{display:flex;border-bottom:1px solid #e8edf2;margin-bottom:16px}
-.tab{padding:9px 16px;background:none;border:none;cursor:pointer;font-size:12px;color:#8a969c;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.1s;font-family:inherit}
-.tab.act{color:#17477e;font-weight:500;border-bottom-color:#17477e}
-.vrow{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border:1px solid #e8edf2;border-radius:6px;margin-bottom:8px;background:#f8fafc}
+.sbar{display:flex;align-items:center;gap:10px;margin:20px 0 14px}
+.sbar-l{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:0.1em;color:#17477e;white-space:nowrap}
+.sbar-line{flex:1;height:1px;background:#edf2f8}
+.cob{border-left:4px solid #1072ba;background:#e8f4fc;padding:11px 14px;border-radius:0 8px 8px 0;margin-bottom:14px;font-size:13px;color:#17477e;line-height:1.6}
+.cob-warn{border-color:#fdb73e;background:#fef3dc;color:#8a5200}
+.cob-ok{border-color:#8bad44;background:#edf5e0;color:#3a5a00}
+.cob-err{border-color:#e24b4a;background:#fce8e8;color:#b02020}
+.cob-gold{border-color:#fdb73e;background:#fef3dc;color:#8a5200}
+.cob-purple{border-color:#9b59b6;background:#f5eefa;color:#5a2090}
+.tabs{display:flex;background:white;border-bottom:1px solid #dce6f0;padding:0 20px;margin-bottom:16px}
+.tab{padding:13px 18px;background:none;border:none;cursor:pointer;font-size:13px;font-weight:700;color:#aab4bc;border-bottom:3px solid transparent;margin-bottom:-1px;transition:all 0.12s;font-family:inherit}
+.tab.act{color:#1072ba;border-bottom-color:#1072ba}
+.tb{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid #dce6f0;background:white;color:#aab4bc;font-family:inherit;transition:all 0.12s}
+.tb.t1a{background:#e8f5d8;color:#3a5a00;border-color:#b8d898}
+.tb.t2a{background:#fef0cc;color:#8a5200;border-color:#f0d080}
+.tb.t3a{background:#ddeeff;color:#1060a0;border-color:#99ccee}
+.vrow{display:flex;align-items:center;justify-content:space-between;background:white;border:1px solid #dce6f0;border-radius:8px;padding:14px 18px;margin-bottom:8px}
 .vbtns{display:flex;gap:6px}
-.vb{padding:4px 10px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid #d0d8e0;background:transparent;color:#8a969c;font-family:inherit}
-.vb-f{background:#8bad4415;color:#3a5a00;border-color:#8bad44}
-.vb-a{background:#e24b4a15;color:#c0392b;border-color:#e24b4a}
-.vb-r{background:#fdb73e15;color:#8a5200;border-color:#fdb73e}
-.dg{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
-.df-l{font-size:10px;text-transform:uppercase;letter-spacing:0.07em;color:#8a969c;margin-bottom:2px}
-.df-v{font-size:13px;color:#1a2530}
-.dr-area{width:100%;padding:10px 12px;border:1px solid #d0d8e0;border-radius:6px;font-size:12px;color:#1a2530;background:#f8fafc;font-family:inherit;outline:none;resize:vertical;line-height:1.7;min-height:220px}
+.vb{padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;border:1.5px solid #dce6f0;background:transparent;color:#5a646a;font-family:inherit;transition:all 0.1s}
+.vb-f{background:#e8f5d8;color:#3a5a00;border-color:#b8d898}
+.vb-a{background:#fce8e8;color:#b02020;border-color:#f0b8b8}
+.vb-r{background:#fef0cc;color:#8a5200;border-color:#f0d080}
+.dg{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.df-l{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#c8d0d8;margin-bottom:3px}
+.df-v{font-size:14px;color:#17477e}
+.dr-area{width:100%;padding:12px 14px;border:1.5px solid #dce6f0;border-radius:8px;font-size:13px;color:#17477e;background:#fafbfe;font-family:inherit;outline:none;resize:vertical;line-height:1.7;min-height:220px}
 .dr-area:focus{border-color:#1072ba;background:white}
-.empty{padding:40px;text-align:center;color:#8a969c}
-.back-btn{background:none;border:none;cursor:pointer;font-size:11px;color:#8a969c;display:flex;align-items:center;gap:4px;margin-bottom:14px;padding:0;font-family:inherit}
+.empty{padding:48px;text-align:center;color:#aab4bc}
+.back-btn{background:none;border:none;cursor:pointer;font-size:12px;color:#aab4bc;display:flex;align-items:center;gap:5px;margin-bottom:16px;padding:0;font-family:inherit;font-weight:700;letter-spacing:0.03em;text-transform:uppercase}
 .back-btn:hover{color:#17477e}
-.sfooter{padding:12px 16px;border-top:1px solid rgba(255,255,255,0.1);font-size:10px;color:rgba(255,255,255,0.4);line-height:1.6}
-.plan-ref{background:#f4f7fa;border:1px solid #e8edf2;border-radius:6px;padding:12px 14px;margin-bottom:10px}
-.plan-ref-src{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#1072ba;margin-bottom:4px}
-.plan-ref-sec{font-size:11px;font-weight:600;color:#17477e;margin-bottom:4px}
+.plan-ref{background:#e8f4fc;border-left:4px solid #1072ba;border-radius:0 8px 8px 0;padding:13px 16px;margin-bottom:10px}
+.plan-ref-src{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:0.08em;color:#1072ba;margin-bottom:3px}
+.plan-ref-sec{font-size:12px;font-weight:700;color:#17477e;margin-bottom:4px}
 .plan-ref-txt{font-size:12px;color:#5a646a;line-height:1.6;font-style:italic}
-.res-opt{border:1px solid #d0d8e0;border-radius:6px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:all 0.1s}
-.res-opt:hover{border-color:#1072ba;background:#1072ba06}
-.res-opt.selected{border-color:#1072ba;background:#1072ba0d}
-.res-opt-label{font-size:12px;font-weight:600;color:#17477e;margin-bottom:3px}
-.res-opt-desc{font-size:11px;color:#8a969c;line-height:1.5}
-.equity-check{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid #e8edf2;border-radius:6px;margin-bottom:8px;background:#f8fafc}
-.equity-check input{margin-top:2px;flex-shrink:0;accent-color:#1072ba}
-.equity-check-text{font-size:12px;color:#5a646a;line-height:1.5}
-.modal-backdrop{position:absolute;top:0;left:0;width:100%;min-height:100%;background:rgba(23,71,126,0.18);display:flex;align-items:flex-start;justify-content:center;padding-top:60px;z-index:100}
-.modal{background:white;border-radius:10px;border:1px solid #e8edf2;padding:24px;width:600px;max-width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.12)}
-.modal-title{font-size:16px;font-weight:500;color:#17477e;margin-bottom:8px}
-.modal-sub{font-size:12px;color:#8a969c;margin-bottom:16px;line-height:1.5}
-.search-bar{display:flex;gap:8px;margin-bottom:16px}
-.copy-cite{background:none;border:1px solid #d0d8e0;border-radius:4px;padding:3px 8px;font-size:10px;color:#8a969c;cursor:pointer;font-family:inherit;white-space:nowrap}
-.copy-cite:hover{background:#f4f7fa;color:#17477e}
-.copy-cite.copied{background:#8bad4415;color:#3a5a00;border-color:#8bad44}
+.res-opt{border:1.5px solid #dce6f0;border-radius:8px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:all 0.12s;background:white}
+.res-opt:hover{border-color:#1072ba;background:#f0f8ff}
+.res-opt.selected{border-color:#1072ba;background:#e8f4fc}
+.res-opt-label{font-size:13px;font-weight:700;color:#17477e;margin-bottom:3px}
+.res-opt-desc{font-size:12px;color:#aab4bc;line-height:1.5}
+.equity-check{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1.5px solid #dce6f0;border-radius:8px;margin-bottom:8px;background:white}
+.equity-check input{margin-top:2px;flex-shrink:0;accent-color:#1072ba;width:16px;height:16px}
+.equity-check-text{font-size:13px;color:#5a646a;line-height:1.5}
+.modal-backdrop{position:absolute;top:0;left:0;width:100%;min-height:100%;background:rgba(23,71,126,0.2);display:flex;align-items:flex-start;justify-content:center;padding-top:60px;z-index:100}
+.modal{background:white;border-radius:12px;border:1px solid #dce6f0;padding:28px;width:640px;max-width:92%;box-shadow:0 8px 40px rgba(23,71,126,0.15)}
+.modal-title{font-size:18px;font-weight:300;color:#17477e;margin-bottom:6px;letter-spacing:-0.01em}
+.modal-sub{font-size:13px;color:#aab4bc;margin-bottom:20px;line-height:1.5}
+.search-bar{display:flex;gap:10px;margin-bottom:16px}
+.copy-cite{background:none;border:1.5px solid #dce6f0;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;color:#aab4bc;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all 0.12s}
+.copy-cite:hover{border-color:#1072ba;color:#1072ba}
+.copy-cite.copied{background:#e8f5d8;color:#3a5a00;border-color:#b8d898}
 `;
 
 function Pill({label,cls}){return <span className={"pill "+(cls||"p-gray")}>{label}</span>;}
@@ -707,6 +774,311 @@ function NewCase({onSave,onBack}){
   );
 }
 
+// ── CEO APPEAL MODAL ──────────────────────────────────────────────────────────
+function CEOAppealModal({c, onClose, onSave}) {
+  const [grounds, setGrounds] = useState([]);
+  const [summary, setSummary] = useState("");
+  const [docs, setDocs] = useState("");
+  const [relief, setRelief] = useState("");
+
+  function toggleGround(id) {
+    setGrounds(function(prev) {
+      return prev.includes(id) ? prev.filter(function(g){return g!==id;}) : [...prev,id];
+    });
+  }
+
+  function handleSubmit() {
+    if(!grounds.length || !summary.trim()) return;
+    const appealData = {
+      appealStatus: "Submitted",
+      appealDate: todayStr(),
+      appealGrounds: grounds,
+      appealSummary: summary,
+      appealDocs: docs,
+      appealRelief: relief,
+    };
+    onSave(appealData);
+    // Build mailto to CEO office
+    const groundLabels = grounds.map(function(g){
+      const found = APPEAL_GROUNDS.find(function(a){return a.id===g;});
+      return found ? found.label : g;
+    }).join("; ");
+    const bodyLines = [
+      "Dear CEO,",
+      "",
+      "I am submitting a formal Plan Interpretation Review request regarding ICC Case " + c.ref + ".",
+      "",
+      "CASE REFERENCE: " + c.ref,
+      "PARTICIPANT: " + (c.participant||"[name]"),
+      "PLAN PERIOD: " + (c.planPeriod||"[period]"),
+      "DECISION DATE: " + (c.decided||"[date]"),
+      "APPEAL SUBMISSION DATE: " + todayStr(),
+      "",
+      "GROUND(S) FOR APPEAL:",
+      groundLabels,
+      "",
+      "FACTUAL SUMMARY:",
+      summary,
+      "",
+      docs ? ("SUPPORTING DOCUMENTATION:\n" + docs) : "",
+      "",
+      "RELIEF REQUESTED:",
+      relief || "[describe requested outcome]",
+      "",
+      "This appeal is submitted within the 15 business day window per the ICC Charter.",
+      "",
+      "Sincerely,",
+      (c.participant||"[Name]"),
+    ];
+    const body = bodyLines.filter(function(l,i,arr){
+      return !(l===""&&arr[i-1]==="");
+    }).join("\n");
+    const subj = "Plan Interpretation Review Request -- Case " + c.ref;
+    const to = "icc@alianza.com";
+    const href = ["mailto:",encodeURIComponent(to),
+      "?subject=",encodeURIComponent(subj),
+      "&cc=",encodeURIComponent("icc@alianza.com"),
+      "&body=",encodeURIComponent(body)
+    ].join("");
+    window.location.href = href;
+    onClose();
+  }
+
+  const canSubmit = grounds.length > 0 && summary.trim().length > 20;
+
+  return (
+    <div className="modal-backdrop" onClick={function(e){if(e.target===e.currentTarget)onClose();}}>
+      <div className="modal" style={{width:680}}>
+        <div className="modal-title">Escalate to CEO Plan Interpretation Review</div>
+        <div className="modal-sub">Complete all required fields. This will open a pre-drafted appeal email to icc@alianza.com for the CEO office. The appeal must be submitted within 15 business days of the Decision Record.</div>
+
+        <div style={{background:"#fef3dc",border:"1px solid #fde5b8",borderRadius:8,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#8a5200"}}>
+          <strong>Valid grounds only:</strong> Procedural defect, material new evidence, or manifest misapplication. Disagreement with the outcome is not a valid ground.
+        </div>
+
+        <SBar label="Case Reference"/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+          {[["Case",c.ref],["Participant",c.participant||"--"],["Decided",c.decided||"--"]].map(function(item){return(
+            <div key={item[0]} style={{background:"#f7fafd",borderRadius:6,padding:"10px 12px",border:"1px solid #dce6f0"}}>
+              <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em",color:"#aab4bc",marginBottom:3}}>{item[0]}</div>
+              <div style={{fontSize:13,fontWeight:700,color:"#17477e"}}>{item[1]}</div>
+            </div>
+          );})}
+        </div>
+
+        <SBar label="Ground(s) for Appeal *"/>
+        {APPEAL_GROUNDS.map(function(g){return(
+          <div key={g.id} className="equity-check" style={{cursor:"pointer",borderColor:grounds.includes(g.id)?"#1072ba":"#dce6f0",background:grounds.includes(g.id)?"#e8f4fc":"white"}} onClick={function(){toggleGround(g.id);}}>
+            <input type="checkbox" checked={grounds.includes(g.id)} onChange={function(){toggleGround(g.id);}} style={{marginTop:2,accentColor:"#1072ba",width:16,height:16,flexShrink:0}}/>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:"#17477e",marginBottom:2}}>{g.label}</div>
+              <div className="equity-check-text">{g.desc}</div>
+            </div>
+          </div>
+        );})}
+
+        <div className="fg" style={{marginTop:12}}>
+          <label className="lbl">Factual Summary * <span style={{color:"#aab4bc",fontWeight:400,textTransform:"none"}}>(describe the basis for each ground asserted)</span></label>
+          <textarea className="ta" rows={5} value={summary} onChange={function(e){setSummary(e.target.value);}} placeholder="Describe specifically what procedural defect occurred, what new evidence exists, or how the plan language was misapplied. Focus on the appeal ground(s) -- do not restate the original dispute."/>
+        </div>
+        <div className="fg">
+          <label className="lbl">Supporting Documents (optional)</label>
+          <input className="inp" value={docs} onChange={function(e){setDocs(e.target.value);}} placeholder="List document titles and SharePoint links"/>
+        </div>
+        <div className="fg">
+          <label className="lbl">Relief Requested</label>
+          <textarea className="ta" rows={2} value={relief} onChange={function(e){setRelief(e.target.value);}} placeholder="Affirm the ruling, modify the ruling, or remand to Committee for reconsideration..."/>
+        </div>
+
+        <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:8}}>
+          <button className="btn btn-sm" onClick={onClose}>Cancel</button>
+          <button className="btn btn-p btn-sm" onClick={handleSubmit} disabled={!canSubmit} style={{opacity:canSubmit?1:0.5}}>Submit Appeal + Open Email</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── CGO EXCEPTION MEMO (standalone page) ─────────────────────────────────────
+function CGOExceptionMemo({onSave, onBack}) {
+  const [fd, setFd] = useState(CGO_MEMO_EMPTY);
+  function uf(k){return function(e){setFd(function(p){return{...p,[k]:e.target.value};});};}
+  function ub(k){return function(e){setFd(function(p){return{...p,[k]:e.target.checked};});};}
+
+  const payoutNum = parseFloat((fd.payoutImpact||"").replace(/,/g,""))||0;
+  const overLimit = payoutNum > 50000;
+  const allChecked = fd.eq1&&fd.eq2&&fd.eq3&&fd.eq4;
+  const canSave = fd.participant&&fd.trigger&&fd.resolution&&fd.rationale&&allChecked&&!overLimit;
+
+  function handleSave() {
+    if(!canSave) return;
+    const ref = "CGO-" + new Date().getFullYear() + "-" + String(Math.floor(Math.random()*900)+100);
+    onSave({
+      ...fd,
+      tier: 2,
+      ref,
+      status: "Decided",
+      source: "cgo",
+      opened: todayStr(),
+      decided: todayStr(),
+      cgoMemo: {
+        resolution: fd.resolution,
+        payoutImpact: fd.payoutImpact,
+        effectiveDate: fd.effectiveDate,
+        methodology: fd.rationale,
+        precedentRef: fd.precedentRef,
+        equityChecks: {eq1:fd.eq1,eq2:fd.eq2,eq3:fd.eq3,eq4:fd.eq4},
+      },
+      decisionDraft: [
+        "CASE SUMMARY:",
+        (fd.participant||"[name]")+" ("+(fd.role||"[role]")+") -- "+(fd.trigger||"[trigger]")+" -- "+(fd.planPeriod)+".",
+        "Deal value: $"+(fd.dealValue||"[value]")+". Compensation calculated by CommOps: $"+(fd.compCalculated||"[amount]")+".",
+        "Payout impact of CGO ruling: $"+(fd.payoutImpact||"[amount]")+".",
+        "",
+        "POLICY BASIS:",
+        fd.policyBasis||"[see CGO Exception Memo]",
+        "",
+        "CGO RATIONALE:",
+        fd.rationale,
+        "",
+        "DISPOSITION:",
+        (RESOLUTION_OPTIONS.find(function(r){return r.id===fd.resolution;})||{label:"[see memo]"}).label,
+        "",
+        "DETERMINATION:",
+        "CGO pre-approval per ICC Charter Section 4.2. Effective: "+(fd.effectiveDate||todayStr())+".",
+        fd.precedentRef?"Precedent reference: "+fd.precedentRef:"",
+        "",
+        "EQUITY ATTESTATION: All four attestations completed by CGO.",
+      ].filter(Boolean).join("\n"),
+      votes: {},
+      auditLog: [todayStr()+" -- CGO Exception Memo completed and case created."],
+    });
+  }
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">CGO Exception Memo</div>
+          <div className="page-sub">Tier 2 pre-approval -- complete all sections and equity attestations before saving</div>
+        </div>
+        <div className="page-header-btns">
+          <button className="btn btn-sm" onClick={onBack}>Back to Dashboard</button>
+        </div>
+      </div>
+      <div className="page" style={{maxWidth:800}}>
+        {overLimit&&<div className="cob cob-err" style={{marginBottom:16}}><strong>Payout impact exceeds $50,000.</strong> This matter must be escalated to Tier 3 Full Committee. You cannot save this CGO Memo until the payout impact is corrected or the case is reclassified.</div>}
+
+        <div className="card"><div style={{padding:"18px 20px"}}>
+          <SBar label="Section 1 -- Case Identification"/>
+          <div className="fr">
+            <div className="fg"><label className="lbl">Participant Name *</label><input className="inp" value={fd.participant} onChange={uf("participant")}/></div>
+            <div className="fg"><label className="lbl">Title / Role</label><input className="inp" value={fd.role} onChange={uf("role")}/></div>
+            <div className="fg"><label className="lbl">Direct Manager</label><input className="inp" value={fd.manager} onChange={uf("manager")}/></div>
+            <div className="fg"><label className="lbl">Plan Period</label>
+              <select className="sel" value={fd.planPeriod} onChange={uf("planPeriod")}>
+                <option>2026 1H</option><option>2026 2H</option><option>2025 2H</option>
+              </select>
+            </div>
+            <div className="fg"><label className="lbl">Rep Email</label><input className="inp" value={fd.repEmail} onChange={uf("repEmail")} placeholder="rep@alianza.com"/></div>
+            <div className="fg"><label className="lbl">Effective Date</label><input className="inp" value={fd.effectiveDate} onChange={uf("effectiveDate")} placeholder="e.g. Apr 1, 2026"/></div>
+          </div>
+          <SBar label="Trigger / Nature of Decision"/>
+          <div className="fg"><label className="lbl">Trigger Type *</label>
+            <select className="sel" value={fd.trigger} onChange={uf("trigger")}>
+              <option value="">Select...</option>
+              {TRIGGERS.map(function(t){return <option key={t}>{t}</option>;})}
+              <option value="Plan Language Ambiguity">Plan Language Ambiguity</option>
+              <option value="Non-Standard Payout Request">Non-Standard Payout Request</option>
+              <option value="Booking Policy Edge Case">Booking Policy Edge Case</option>
+              <option value="Fairness / Equity Concern">Fairness / Equity Concern</option>
+            </select>
+          </div>
+          <div className="fg"><label className="lbl">Deal / Event Description</label>
+            <textarea className="ta" rows={3} value={fd.dealDesc} onChange={uf("dealDesc")} placeholder="Customer, product(s), booking date, relevant context..."/>
+          </div>
+          <div className="fr">
+            <div className="fg"><label className="lbl">Deal Value ($)</label><input className="inp" value={fd.dealValue} onChange={uf("dealValue")}/></div>
+            <div className="fg"><label className="lbl">Comp Calculated (CommOps) ($)</label><input className="inp" value={fd.compCalculated} onChange={uf("compCalculated")}/></div>
+            <div className="fg" style={{gridColumn:"span 2"}}>
+              <label className="lbl">Payout Impact ($) * <span style={{color:"#aab4bc",fontWeight:400,textTransform:"none"}}>(delta between CommOps calculation and CGO ruling)</span></label>
+              <input className="inp" value={fd.payoutImpact} onChange={uf("payoutImpact")} placeholder="Must be under $50,000" style={{borderColor:overLimit?"#e24b4a":""}}/>
+              {overLimit&&<div style={{fontSize:11,color:"#b02020",marginTop:4,fontWeight:700}}>Exceeds $50,000 limit -- must escalate to Tier 3</div>}
+            </div>
+          </div>
+        </div></div>
+
+        <div className="card"><div style={{padding:"18px 20px"}}>
+          <SBar label="Section 2 -- Resolution Mechanism *"/>
+          {RESOLUTION_OPTIONS.map(function(r){return(
+            <div key={r.id} className={"res-opt"+(fd.resolution===r.id?" selected":"")} onClick={function(){setFd(function(p){return{...p,resolution:r.id};});}}>
+              <div className="res-opt-label">{r.label}</div>
+              <div className="res-opt-desc">{r.desc}</div>
+            </div>
+          );})}
+        </div></div>
+
+        <div className="card"><div style={{padding:"18px 20px"}}>
+          <SBar label="Section 3 -- Policy Basis and Rationale"/>
+          {fd.trigger&&PLAN_REFS[fd.trigger]&&<PlanRefsPanel trigger={fd.trigger}/>}
+          <div className="fg"><label className="lbl">Applicable Plan Provisions</label>
+            <textarea className="ta" rows={3} value={fd.policyBasis} onChange={uf("policyBasis")} placeholder="Cite the specific 2026 1H Plan section(s) or Alianza Booking Definition Policy that govern this matter..."/>
+          </div>
+          <div className="fg"><label className="lbl">Rationale *</label>
+            <textarea className="ta" rows={5} value={fd.rationale} onChange={uf("rationale")} placeholder="Explain the plan interpretation applied, why this resolution is appropriate, and the policy basis for the ruling. Must be sufficient for a future reader to understand the reasoning without access to the underlying case files."/>
+          </div>
+        </div></div>
+
+        <div className="card"><div style={{padding:"18px 20px"}}>
+          <SBar label="Section 4 -- Precedent Reference"/>
+          <div className="cob" style={{marginBottom:14}}>Search the Precedent Register, click Copy Reference on the relevant prior ruling, and paste below. If no materially similar prior ruling exists, state that here.</div>
+          <div className="fg"><label className="lbl">Prior Ruling Reference</label>
+            <textarea className="ta" rows={3} value={fd.precedentRef} onChange={uf("precedentRef")} placeholder={"ICC-2025-014 -- Rep-Filed Dispute -- 2025 2H\nResolution: Partial commission (60%), no quota retirement\nConsistent with this ruling: Yes"}/>
+          </div>
+          <div className="fg">
+            <label className="lbl">Consistent with prior ruling?</label>
+            <div style={{display:"flex",gap:12,marginTop:4}}>
+              {["yes","no","no_prior"].map(function(v){return(
+                <label key={v} style={{display:"flex",alignItems:"center",gap:6,fontSize:13,cursor:"pointer",color:fd.precedentConsistent===v?"#17477e":"#5a646a"}}>
+                  <input type="radio" name="precedentConsistent" value={v} checked={fd.precedentConsistent===v} onChange={uf("precedentConsistent")} style={{accentColor:"#1072ba"}}/> 
+                  {v==="yes"?"Yes":v==="no"?"No -- see distinguishing facts below":"No prior ruling found"}
+                </label>
+              );})}
+            </div>
+          </div>
+          {fd.precedentConsistent==="no"&&(
+            <div className="fg"><label className="lbl">Distinguishing Facts</label>
+              <textarea className="ta" rows={3} value={fd.precedentDistinguish} onChange={uf("precedentDistinguish")} placeholder="Explain what facts distinguish this matter and justify different treatment..."/>
+            </div>
+          )}
+        </div></div>
+
+        <div className="card"><div style={{padding:"18px 20px"}}>
+          <SBar label="Section 5 -- Equity Attestation"/>
+          <div className="cob cob-warn" style={{marginBottom:14}}>All four attestations must be checked before this memo can be saved.</div>
+          {[
+            {k:"eq1",text:"I have searched the ICC Precedent Register for materially similar prior rulings and either applied them consistently or documented distinguishing facts in Section 4 above."},
+            {k:"eq2",text:"I have reviewed current-period Tier 2 decisions and this ruling is consistent with same-period treatment, or I have documented the distinguishing facts in Section 4 above."},
+            {k:"eq3",text:"I have considered whether similarly situated participants in comparable roles and territories have received consistent treatment, and I am not aware of material inconsistency not explained by the facts documented above."},
+            {k:"eq4",text:"The payout impact of this decision is under $50,000 and within my approved CGO budget authority for the current plan period."},
+          ].map(function(item){return(
+            <div key={item.k} className="equity-check" style={{borderColor:fd[item.k]?"#8bad44":"#dce6f0",background:fd[item.k]?"#edf5e0":"white"}}>
+              <input type="checkbox" checked={!!fd[item.k]} onChange={ub(item.k)} style={{marginTop:2,accentColor:"#8bad44",width:16,height:16,flexShrink:0}}/>
+              <div className="equity-check-text">{item.text}</div>
+            </div>
+          );})}
+          {!allChecked&&<div style={{fontSize:11,color:"#aab4bc",marginTop:8,fontStyle:"italic"}}>Complete all four attestations to enable saving.</div>}
+        </div></div>
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8,paddingBottom:32}}>
+          <button className="btn" onClick={onBack}>Cancel</button>
+          <button className="btn btn-p" onClick={handleSave} disabled={!canSave} style={{opacity:canSave?1:0.5}}>Save CGO Exception Memo</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── CASE DETAIL ───────────────────────────────────────────────────────────────
 function CaseDetail({c,onPatch,onBack}){
   const [tab,setTab]=useState("overview");
@@ -745,6 +1117,7 @@ function CaseDetail({c,onPatch,onBack}){
   }
   function recordVote(member,vote){onPatch(c.ref,{votes:{...votes,[member]:vote}});}
   const [dispSaved,setDispSaved]=useState(false);
+  const [showAppeal,setShowAppeal]=useState(false);
   function saveDisposition(){
     onPatch(c.ref,{disposition});
     setDispSaved(true);
@@ -771,6 +1144,8 @@ function CaseDetail({c,onPatch,onBack}){
     : baseTabs;
 
   return(
+    <div style={{position:"relative"}}>
+      {showAppeal&&<CEOAppealModal c={c} onClose={function(){setShowAppeal(false);}} onSave={function(data){onPatch(c.ref,data);setShowAppeal(false);}}/>}
     <div className="page" style={{maxWidth:880}}>
       <button className="back-btn" onClick={onBack}>\u2190 Back to Case Dashboard</button>
 
@@ -806,9 +1181,9 @@ function CaseDetail({c,onPatch,onBack}){
           {c.status!=="Decided"&&c.status!=="Closed"&&!isPending&&decided&&c.tier===3&&(
             <button className="btn btn-p btn-sm" onClick={finalize}>Finalize Decision</button>
           )}
-          {c.status==="Decided"&&(
-            <button className="btn btn-sm" onClick={function(){downloadDecisionPDF(c);}}>Download Decision Record</button>
-          )}
+          {c.status==="Decided"&&<button className="btn btn-sm" onClick={function(){downloadDecisionPDF(c);}}>Download Decision Record</button>}
+          {c.status==="Decided"&&!c.appealStatus&&<button className="btn btn-sm" style={{borderColor:"#f0d080",color:"#8a5200",background:"#fef3dc"}} onClick={function(){setShowAppeal(true);}}>Escalate to CEO Review</button>}
+          {c.appealStatus&&<span style={{fontSize:11,fontWeight:700,background:"#f5eefa",color:"#5a2090",border:"1px solid #d8b8f0",borderRadius:20,padding:"4px 12px"}}>Appeal: {c.appealStatus} {c.appealDate||""}</span>}
           {c.status==="Decided"&&(
             <button className="btn btn-sm" onClick={sendDecision}>Send Decision to Rep</button>
           )}
@@ -1002,29 +1377,100 @@ function CaseDetail({c,onPatch,onBack}){
       )}
 
       {tab==="decision"&&(
-        <div className="card" style={{padding:16}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-            <div>
-              <div style={{fontSize:13,fontWeight:500,color:"#17477e"}}>Decision Record</div>
-              <div style={{fontSize:11,color:"#8a969c",marginTop:2}}>Complete all four sections. CGO reviews before distributing.</div>
+        <div>
+          <div className="card" style={{overflow:"visible",marginBottom:0,borderBottom:"none",borderRadius:"10px 10px 0 0"}}>
+            <div style={{background:"linear-gradient(135deg,#17477e 0%,#354c59 100%)",padding:"18px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:4}}>Incentive Compensation Committee</div>
+                <div style={{fontSize:20,fontWeight:300,color:"white",letterSpacing:"-0.01em"}}>Decision Record</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",marginBottom:2}}>Case Reference</div>
+                <div style={{fontSize:16,fontWeight:700,color:"white",fontFamily:"monospace"}}>{c.ref}</div>
+                {c.source!=="historical"&&<button className="btn btn-sm" style={{marginTop:10,background:"rgba(255,255,255,0.15)",color:"white",border:"1px solid rgba(255,255,255,0.3)",fontSize:11}} onClick={loadTemplate}>{c.decisionDraft?"Reset Template":"Load Template"}</button>}
+              </div>
             </div>
-            {c.source!=="historical"&&<button className="btn btn-sm" onClick={loadTemplate}>{c.decisionDraft?"Reset Template":"Load Template"}</button>}
           </div>
-          {!c.decisionDraft&&<Cob variant="gold">Click Load Template to populate the structure with case details pre-filled.</Cob>}
-          {c.decisionDraft&&(
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
-              {[["Vote",inf+" in favor / "+ag+" against"],["Reference",c.ref],["Plan Period",c.planPeriod||"\u2014"]].map(function(item){return(
-                <div key={item[0]} style={{background:"#f8fafc",borderRadius:6,padding:"10px 12px",border:"1px solid #e8edf2"}}>
-                  <div style={{fontSize:10,textTransform:"uppercase",letterSpacing:"0.07em",color:"#8a969c",marginBottom:3}}>{item[0]}</div>
-                  <div style={{fontSize:12,fontWeight:500}}>{item[1]}</div>
-                </div>
-              );})}
+
+          <div className="card" style={{borderRadius:0,borderTop:"none",borderBottom:"none",marginBottom:0}}>
+            <div style={{padding:"16px 20px"}}>
+              <div style={{fontSize:10,fontWeight:900,textTransform:"uppercase",letterSpacing:"0.1em",color:"#1072ba",marginBottom:12}}>Case Identification</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",border:"1px solid #dce6f0",borderRadius:8,overflow:"hidden"}}>
+                {[["Participant",c.participant||"--"],["Role",c.role||"--"],["Manager",c.manager||"--"],["Plan Period",c.planPeriod||"--"],["Trigger",(c.trigger||"--").slice(0,28)],["Tier",c.tier?"Tier "+c.tier:"--"],["Opened",c.opened||"--"],["Decided",c.decided||"--"],["Vote",inf+ag>0?inf+" in favor / "+ag+" against":"Pending"]].map(function(item,idx){return(
+                  <div key={item[0]} style={{padding:"10px 14px",borderRight:idx%3<2?"1px solid #dce6f0":"none",borderBottom:idx<6?"1px solid #dce6f0":"none",background:Math.floor(idx/3)%2===0?"#fafbfe":"white"}}>
+                    <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:"#aab4bc",marginBottom:3}}>{item[0]}</div>
+                    <div style={{fontSize:12,color:"#17477e",fontWeight:700}}>{item[1]}</div>
+                  </div>
+                );})}
+              </div>
             </div>
-          )}
-          <textarea className="dr-area" value={c.decisionDraft||""} onChange={function(e){onPatch(c.ref,{decisionDraft:e.target.value});}} placeholder="Click Load Template above, or type directly here." rows={16}/>
-          <div style={{fontSize:10,color:"#8a969c",marginTop:6,fontStyle:"italic"}}>Retain in the ICC archive per the Committee Charter.</div>
+          </div>
+
+          {[
+            {key:"CASE SUMMARY",     label:"Case Summary",          rows:4, hint:"State the participant, role, trigger type, and plan period. Include deal value, compensation claimed by rep, and compensation calculated by CommOps."},
+            {key:"POLICY ANALYSIS",  label:"Policy Analysis",       rows:8, hint:"The following provisions were reviewed. Auto-populated from plan refs when you load the template -- delete inapplicable provisions, add any additional provisions or ambiguities considered."},
+            {key:"COMMITTEE DELIBERATION", label:"Committee Deliberation", rows:6, hint:"Document the Committee's interpretation of applicable provisions, key considerations weighed, and the reasoning behind the determination. If the vote was not unanimous, note the basis for any dissent without attributing positions to individuals."},
+            {key:"DISPOSITION",      label:"Disposition",           rows:3, hint:"State the selected resolution mechanism (e.g. Commission + Full Quota Retirement) and any conditions, amounts, or milestones attached."},
+            {key:"DETERMINATION",    label:"Determination",         rows:4, hint:"The Committee voted [X] in favor and [Y] against. State the specific ruling: amount approved or denied, methodology applied, effective date, and any conditions or milestones attached to payment."},
+          ].map(function(sec){
+            const ALL_KEYS=["CASE SUMMARY","POLICY ANALYSIS","COMMITTEE DELIBERATION","DISPOSITION","DETERMINATION"];
+            const draft=c.decisionDraft||"";
+            const secStart=draft.indexOf(sec.key+":");
+            let secContent="";
+            if(secStart>-1){
+              const afterLabel=draft.indexOf("\n",secStart)+1;
+              const nextPositions=ALL_KEYS.filter(function(k){return k!==sec.key;}).map(function(k){return draft.indexOf(k+":",afterLabel);}).filter(function(i){return i>afterLabel;});
+              const secEnd=nextPositions.length?Math.min(...nextPositions):draft.length;
+              secContent=draft.substring(afterLabel,secEnd).trim();
+            }
+            function handleChange(e){
+              const newVal=e.target.value;
+              const existing=c.decisionDraft||"";
+              const parsed={};
+              ALL_KEYS.forEach(function(k,ki){
+                const kStart=existing.indexOf(k+":");
+                if(kStart>-1){
+                  const afterLbl=existing.indexOf("\n",kStart)+1;
+                  const nexts=ALL_KEYS.slice(ki+1).map(function(nk){return existing.indexOf(nk+":",afterLbl);}).filter(function(i){return i>afterLbl;});
+                  const kEnd=nexts.length?Math.min(...nexts):existing.length;
+                  parsed[k]=existing.substring(afterLbl,kEnd).trim();
+                } else { parsed[k]=""; }
+              });
+              parsed[sec.key]=newVal;
+              const rebuilt=ALL_KEYS.map(function(k){return k+":\n"+parsed[k];}).join("\n\n");
+              onPatch(c.ref,{decisionDraft:rebuilt});
+            }
+            return(
+              <div key={sec.key} className="card" style={{borderRadius:0,borderTop:"none",borderBottom:"none",marginBottom:0}}>
+                <div style={{padding:"16px 20px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                    <div style={{fontSize:10,fontWeight:900,textTransform:"uppercase",letterSpacing:"0.1em",color:"#1072ba"}}>{sec.label}</div>
+                    {!c.decisionDraft&&<span style={{fontSize:11,color:"#aab4bc",fontStyle:"italic"}}>Load template to pre-populate</span>}
+                  </div>
+                  <textarea className="dr-area" rows={sec.rows} style={{background:"white"}} placeholder={sec.hint} value={secContent} onChange={handleChange}/>
+                </div>
+              </div>
+            );
+          })}
+
+          <div className="card" style={{borderRadius:"0 0 10px 10px",borderTop:"none",marginBottom:16}}>
+            <div style={{padding:"16px 20px"}}>
+              <div style={{fontSize:10,fontWeight:900,textTransform:"uppercase",letterSpacing:"0.1em",color:"#1072ba",marginBottom:8}}>Appeal Rights</div>
+              <div style={{fontSize:12,color:"#5a646a",lineHeight:1.7,background:"#f7fafd",border:"1px solid #dce6f0",borderRadius:6,padding:"12px 14px"}}>
+                This decision is final per the ICC Charter. A plan participant may request a CEO Plan Interpretation Review within <strong>15 business days</strong> of receipt. Valid grounds: (1) procedural defect, (2) material new evidence not available at time of ruling, (3) manifest misapplication of plan language. Submit written appeal to the CEO office with copy to <strong>icc@alianza.com</strong>.
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12}}>
+                <div style={{fontSize:10,color:"#aab4bc",fontStyle:"italic"}}>Retain per Charter Section 9. Distribution: participant, direct manager, ICC archive.</div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <div style={{fontSize:10,color:"#aab4bc"}}>Reviewed and approved for distribution by CGO:</div>
+                  <div style={{fontSize:12,color:"#17477e",fontWeight:700,borderBottom:"1px solid #aab4bc",minWidth:160,paddingBottom:2}}>&nbsp;</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
+    </div>
     </div>
   );
 }
@@ -1245,19 +1691,57 @@ export default function ICCPortal(){
   const [loaded,setLoaded]=useState(false);
 
   useEffect(function(){
-    store.get("icc_v1").then(function(r){
-      if(r&&r.value) try{setCases(JSON.parse(r.value));}catch(e){}
-      setLoaded(true);
-    });
+    // Try API first, fall back to localStorage
+    fetch("https://icc-portal-api-anh3fnfabvfreabs.centralus-01.azurewebsites.net/api/getCases")
+      .then(function(res){ return res.ok ? res.json() : null; })
+      .then(function(data){
+        if(data && data.length > 0) {
+          setCases(data);
+          // Sync to localStorage as backup
+          try { localStorage.setItem("icc_v1", JSON.stringify(data)); } catch(e) {}
+        } else {
+          // Fall back to localStorage if API returns empty or fails
+          try {
+            const v = localStorage.getItem("icc_v1");
+            if(v) setCases(JSON.parse(v));
+          } catch(e) {}
+        }
+        setLoaded(true);
+      })
+      .catch(function(){
+        // API unavailable - load from localStorage
+        try {
+          const v = localStorage.getItem("icc_v1");
+          if(v) setCases(JSON.parse(v));
+        } catch(e) {}
+        setLoaded(true);
+      });
   },[]);
 
   const saveCases=useCallback(function(updated){
     setCases(updated);
-    store.set("icc_v1",JSON.stringify(updated));
+    // localStorage backup for resilience
+    try { localStorage.setItem("icc_v1", JSON.stringify(updated)); } catch(e) {}
   },[]);
 
-  function addCase(c){saveCases([c,...cases]);setView("dashboard");}
-  function patchCase(ref,patch){saveCases(cases.map(function(c){return c.ref===ref?{...c,...patch}:c;}));}
+  // Wire individual case mutations to the API
+  const apiAddCase = useCallback(async function(c) {
+    await apiCreateCase(c);
+  },[]);
+
+  const apiPatchCase = useCallback(async function(ref, patch) {
+    await apiUpdateCase(ref, patch);
+  },[]);
+
+  function addCase(c){
+    saveCases([c,...cases]);
+    apiAddCase(c);
+    setView("dashboard");
+  }
+  function patchCase(ref,patch){
+    saveCases(cases.map(function(c){return c.ref===ref?{...c,...patch}:c;}));
+    apiPatchCase(ref, patch);
+  }
 
   function importCase(parsed){
     const trigger=parsed.trigger||"";
@@ -1283,21 +1767,33 @@ export default function ICCPortal(){
       <style>{STYLES}</style>
       <div className="app">
         <div className="sidebar">
-          <div className="slogo"><div className="slogo-co">ALIANZA</div><div className="slogo-sub">Incentive Compensation<br/>Committee</div></div>
-          <nav style={{flex:1,padding:"8px 0"}}>
-            {[{id:"dashboard",icon:"▦",label:"Case Dashboard",badge:open||0},{id:"new",icon:"+",label:"Open New Case"},{id:"precedents",icon:"⊞",label:"Precedent Register"},{id:"log",icon:"≡",label:"Case Log"}].map(function(item){return(
+          <div className="slogo">
+            <img className="slogo-img" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZlcnNpb249IjEuMSIgdmlld0JveD0iMCAwIDQwMC4yIDExNS45Ij4KICA8ZGVmcz48c3R5bGU+LmNscy0xe2ZpbGw6IzE3NDc3ZTt9PC9zdHlsZT48L2RlZnM+CiAgPGcgaWQ9IkxheWVyXzEiPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTcwLjgsNjIuNGwtNy45LTE1LjUtOC4yLDE1LjVoMTYuMlpNNTksMzkuNWg4LjNsMjEuMiwzOC4xaC05LjdsLTQuNC04LjNoLTIzLjRsLTQuMyw4LjNoLTguNmwyMC45LTM4LjEiLz48cG9seWdvbiBjbGFzcz0iY2xzLTEiIHBvaW50cz0iOTYuMSAzOS41IDEwNC43IDM5LjUgMTA0LjcgNzAuNCAxMzIuNCA3MC40IDEzMi40IDc3LjYgOTYuMSA3Ny42IDk2LjEgMzkuNSIvPjxyZWN0IGNsYXNzPSJjbHMtMSIgeD0iMTQyLjIiIHk9IjM5LjUiIHdpZHRoPSI4LjYiIGhlaWdodD0iMzguMSIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTE5Mi40LDYyLjRsLTcuOS0xNS41LTguMywxNS41aDE2LjJaTTE4MC42LDM5LjVoOC4zbDIxLjIsMzguMWgtOS43bC00LjQtOC4zaC0yMy40bC00LjMsOC4zaC04LjZsMjAuOS0zOC4xIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMjE2LjIsMzkuNWg1LjlsMjYsMjIuNGMxLjUsMS4yLDIuOSwyLjYsNC4yLDQuMS0uMi0zLjItLjQtNS40LS40LTYuNnYtMjBoNy43djM4LjFoLTUuOWwtMjcuMi0yMy42Yy0xLjEtMS0yLjEtMS45LTMuMS0zLjEuMywyLjkuNCw0LjkuNCw2djIwLjZoLTcuN3YtMzguMVoiLz48cG9seWdvbiBjbGFzcz0iY2xzLTEiIHBvaW50cz0iMjY3LjcgNzMuNCAyOTMuNiA0Ni4zIDI3MC4zIDQ2LjMgMjcwLjMgMzkuNSAzMDcuNCAzOS41IDMwNy40IDQzLjIgMjgxLjIgNzAuNCAzMDcuNCA3MC40IDMwNy40IDc3LjYgMjY3LjcgNzcuNiAyNjcuNyA3My40Ii8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMzQ0LjQsNjIuNGwtNy45LTE1LjUtOC4yLDE1LjVoMTYuMlpNMzMyLjYsMzkuNWg4LjNsMjEuMiwzOC4xaC05LjdsLTQuNC04LjNoLTIzLjRsLTQuMyw4LjNoLTguNmwyMC45LTM4LjEiLz48L2c+PC9zdmc+" alt="ALIANZA"/>
+            <div className="slogo-pill"><span className="slogo-dot"></span><span className="slogo-sub">ICC Portal</span></div>
+          </div>
+          <nav style={{flex:1,paddingTop:8}}>
+            <div className="nav-section">Main</div>
+            {[{id:"dashboard",icon:"▦",label:"Case Dashboard",badge:open||0},{id:"new",icon:"+",label:"Open New Case"},{id:"cgo-memo",icon:"▣",label:"CGO Exception Memo"}].map(function(item){return(
               <button key={item.id} className={"nav-btn"+(view===item.id?" active":"")} onClick={function(){go(item.id);}}>
-                <span style={{fontSize:13,width:16,textAlign:"center"}}>{item.icon}</span>
+                <span className="nav-icon">{item.icon}</span>
                 {item.label}
                 {item.badge?<span className="nav-badge">{item.badge}</span>:null}
               </button>
             );})}
+            <div className="nav-section" style={{marginTop:8}}>Records</div>
+            {[{id:"precedents",icon:"⊞",label:"Precedent Register"},{id:"log",icon:"≡",label:"Case Log"}].map(function(item){return(
+              <button key={item.id} className={"nav-btn"+(view===item.id?" active":"")} onClick={function(){go(item.id);}}>
+                <span className="nav-icon">{item.icon}</span>
+                {item.label}
+              </button>
+            );})}
           </nav>
-          <div className="sfooter">ICC Portal v3.0<br/>ICC Charter v1.1 -- April 1, 2026<br/>Alianza Confidential</div>
+          <div className="sfooter">ICC Portal v4.0<br/>ICC Charter v1.1 -- April 1, 2026<br/>Alianza Confidential</div>
         </div>
         <div className="main">
           {view==="dashboard"&&<Dashboard cases={cases} onGo={go} onImport={importCase}/>}
           {view==="new"&&<NewCase onSave={addCase} onBack={function(){go("dashboard");}}/>}
+          {view==="cgo-memo"&&<CGOExceptionMemo onSave={addCase} onBack={function(){go("dashboard");}}/>}
           {view==="detail"&&<CaseDetail c={cases.find(function(c){return c.ref===selectedRef;})||null} onPatch={patchCase} onBack={function(){go("dashboard");}}/>}
           {view==="precedents"&&<Precedents cases={cases} onAddHistorical={addHistorical}/>}
           {view==="log"&&<CaseLog cases={cases} onGo={go}/>}

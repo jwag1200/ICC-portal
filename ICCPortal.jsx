@@ -271,10 +271,46 @@ function downloadDecisionPDF(c) {
   }
 }
 
+const API = "https://icc-portal-api-anh3fnfabvfreabs.centralus-01.azurewebsites.net/api";
+
 const store = {
-  async get(k) { try { const v=localStorage.getItem(k); return v?{value:v}:null; } catch { return null; } },
-  async set(k,v) { try { localStorage.setItem(k,v); } catch {} },
+  async get(k) {
+    try {
+      const res = await fetch(API+"/getCases");
+      if(!res.ok) throw new Error("API error "+res.status);
+      const cases = await res.json();
+      return cases.length > 0 ? {value: JSON.stringify(cases)} : null;
+    } catch(e) {
+      // Fallback to localStorage if API unavailable
+      try { const v=localStorage.getItem(k); return v?{value:v}:null; } catch { return null; }
+    }
+  },
+  async set(k,v) {
+    // set() is now a no-op -- individual saves handled by saveCases
+  },
 };
+
+async function apiCreateCase(c) {
+  try {
+    const res = await fetch(API+"/createCase", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(c)
+    });
+    return res.ok;
+  } catch(e) { return false; }
+}
+
+async function apiUpdateCase(ref, patch) {
+  try {
+    const res = await fetch(API+"/updateCase?ref="+encodeURIComponent(ref), {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(patch)
+    });
+    return res.ok;
+  } catch(e) { return false; }
+}
 
 const STYLES = `
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1655,19 +1691,57 @@ export default function ICCPortal(){
   const [loaded,setLoaded]=useState(false);
 
   useEffect(function(){
-    store.get("icc_v1").then(function(r){
-      if(r&&r.value) try{setCases(JSON.parse(r.value));}catch(e){}
-      setLoaded(true);
-    });
+    // Try API first, fall back to localStorage
+    fetch("https://icc-portal-api-anh3fnfabvfreabs.centralus-01.azurewebsites.net/api/getCases")
+      .then(function(res){ return res.ok ? res.json() : null; })
+      .then(function(data){
+        if(data && data.length > 0) {
+          setCases(data);
+          // Sync to localStorage as backup
+          try { localStorage.setItem("icc_v1", JSON.stringify(data)); } catch(e) {}
+        } else {
+          // Fall back to localStorage if API returns empty or fails
+          try {
+            const v = localStorage.getItem("icc_v1");
+            if(v) setCases(JSON.parse(v));
+          } catch(e) {}
+        }
+        setLoaded(true);
+      })
+      .catch(function(){
+        // API unavailable - load from localStorage
+        try {
+          const v = localStorage.getItem("icc_v1");
+          if(v) setCases(JSON.parse(v));
+        } catch(e) {}
+        setLoaded(true);
+      });
   },[]);
 
   const saveCases=useCallback(function(updated){
     setCases(updated);
-    store.set("icc_v1",JSON.stringify(updated));
+    // localStorage backup for resilience
+    try { localStorage.setItem("icc_v1", JSON.stringify(updated)); } catch(e) {}
   },[]);
 
-  function addCase(c){saveCases([c,...cases]);setView("dashboard");}
-  function patchCase(ref,patch){saveCases(cases.map(function(c){return c.ref===ref?{...c,...patch}:c;}));}
+  // Wire individual case mutations to the API
+  const apiAddCase = useCallback(async function(c) {
+    await apiCreateCase(c);
+  },[]);
+
+  const apiPatchCase = useCallback(async function(ref, patch) {
+    await apiUpdateCase(ref, patch);
+  },[]);
+
+  function addCase(c){
+    saveCases([c,...cases]);
+    apiAddCase(c);
+    setView("dashboard");
+  }
+  function patchCase(ref,patch){
+    saveCases(cases.map(function(c){return c.ref===ref?{...c,...patch}:c;}));
+    apiPatchCase(ref, patch);
+  }
 
   function importCase(parsed){
     const trigger=parsed.trigger||"";

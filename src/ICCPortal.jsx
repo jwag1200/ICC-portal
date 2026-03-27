@@ -135,72 +135,99 @@ function drTemplate(c, inf, ag) {
   return lines.join("\n");
 }
 
-function buildAcceptEmail(c) {
-  const subj = "ICC Compensation Review -- Case "+c.ref+" Accepted";
-  const to = c.repEmail ? encodeURIComponent(c.repEmail) : "";
-  const bodyLines = [
-    "Dear "+(c.participant||"[Name]")+",",
-    "",
-    "Your compensation review request (Case "+c.ref+") has been accepted for Incentive Compensation Committee review.",
-    "",
-    "The Committee will convene within 15 business days. You will receive written notification of the outcome along with a Decision Record once a ruling has been issued.",
-    "",
-    "While your case is under review, please refrain from discussing the details with other members of the sales team.",
-    "",
-    "If you have any questions, please reach out to your manager.",
-    "",
-    "",
-    "",
-  ];
-  return "mailto:"+to+"?subject="+encodeURIComponent(subj)+"&body="+encodeURIComponent(bodyLines.join("\n"));
+// ── POWER AUTOMATE NOTIFICATION LAYER ────────────────────────────────────────
+// Paste your Power Automate HTTP trigger URLs here after creating each flow.
+// Leave as empty string ("") until the flow is live -- the portal will fall
+// back gracefully and log a console warning instead of throwing an error.
+const PA_WEBHOOKS = {
+  accepted:  "",   // Flow: "ICC -- Case Accepted notification"
+  rejected:  "",   // Flow: "ICC -- Case Not Escalated notification"
+  decision:  "",   // Flow: "ICC -- Decision Record delivered"
+  appeal:    "",   // Flow: "ICC -- Appeal received (CEO office)"
+  slaReminder: "", // Flow: "ICC -- SLA Day-10 reminder" (triggered by PA schedule, not portal)
+};
+
+// Central notification dispatcher. All notifications go through here.
+// On success: returns true. On failure: logs error, returns false.
+// The portal never blocks the user on a notification failure.
+async function sendNotification(type, payload) {
+  const url = PA_WEBHOOKS[type];
+  if(!url) {
+    console.warn("ICC Portal: PA webhook for '"+type+"' is not configured. Notification not sent.");
+    return false;
+  }
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+    });
+    if(!res.ok) {
+      console.error("ICC Portal: PA webhook '"+type+"' returned HTTP "+res.status);
+      return false;
+    }
+    return true;
+  } catch(e) {
+    console.error("ICC Portal: PA webhook '"+type+"' call failed:", e.message);
+    return false;
+  }
 }
 
-function buildRejectEmail(c, reason) {
-  const subj = "ICC Compensation Review -- Case "+c.ref+" Not Escalated";
-  const to = c.repEmail ? encodeURIComponent(c.repEmail) : "";
-  const bodyLines = [
-    "Dear "+(c.participant||"[Name]")+",",
-    "",
-    "Your compensation review request (Case "+c.ref+") has been reviewed and will not be escalated to the Incentive Compensation Committee at this time.",
-    "",
-    "Reason: "+reason,
-    "",
-    "If you have any questions, or believe this decision was made in error, please contact your manager or reach out to the CGO directly to discuss next steps.",
-    "",
-    "",
-    "",
-  ];
-  return "mailto:"+to+"?subject="+encodeURIComponent(subj)+"&body="+encodeURIComponent(bodyLines.join("\n"));
+// Notification payload builders -- these define what Power Automate receives.
+// PA uses these fields to populate the email body. Add fields freely; PA reads
+// whatever you send and you configure the email template on the PA side.
+
+function notifyAccepted(c) {
+  return sendNotification("accepted", {
+    caseRef:      c.ref,
+    participant:  c.participant || "",
+    repEmail:     c.repEmail || "",
+    planPeriod:   c.planPeriod || "",
+    trigger:      c.trigger || "",
+    tier:         c.tier || "",
+    opened:       c.opened || todayStr(),
+  });
 }
 
-function buildDecisionEmail(c, inf, ag) {
-  const subj = "ICC Decision Record -- Case "+c.ref;
-  const to = c.repEmail ? encodeURIComponent(c.repEmail) : "";
-  const determination = (c.decisionDraft||"").split("\n").find(function(l){return l.startsWith("DETERMINATION:");}) || "See attached Decision Record.";
-  const bodyLines = [
-    "Dear "+(c.participant||"[Name]")+",",
-    "",
-    "The Incentive Compensation Committee has issued a ruling on Case "+c.ref+". Please find the Decision Record attached to this email.",
-    "",
-    determination,
-    "",
-    "This decision is final per the ICC Charter.",
-    "",
-    "APPEAL PROCESS",
-    "If you believe there are valid grounds for a CEO Plan Interpretation Review, you may submit a written appeal request to the CEO's office. Please note the following:",
-    "",
-    "-- You have 15 business days from the date of this email to submit your appeal.",
-    "-- Appeals are limited to the following grounds only: (1) procedural defect in how the Committee conducted its review, (2) material new evidence that was not available at the time of the ruling, or (3) manifest misapplication of the plan language.",
-    "-- Disagreement with the outcome or the Committee's judgment is not a valid ground for appeal.",
-    "-- Your written appeal must include: the case reference number, the specific ground(s) you are asserting, a factual summary supporting your position, and any supporting documentation.",
-    "-- Submit your appeal in writing directly to the CEO's office. The CGO can assist you in understanding the process if needed.",
-    "",
-    "If you have any questions, please reach out to your manager or the CGO.",
-    "",
-    "",
-    "",
-  ];
-  return "mailto:"+to+"?subject="+encodeURIComponent(subj)+"&body="+encodeURIComponent(bodyLines.join("\n"));
+function notifyRejected(c, reason) {
+  return sendNotification("rejected", {
+    caseRef:      c.ref,
+    participant:  c.participant || "",
+    repEmail:     c.repEmail || "",
+    planPeriod:   c.planPeriod || "",
+    trigger:      c.trigger || "",
+    rejectedReason: reason,
+    rejectedDate: todayStr(),
+  });
+}
+
+function notifyDecision(c, inf, ag) {
+  const determination = (c.decisionDraft||"").split("\n").find(function(l){return l.startsWith("DETERMINATION:");}) || "";
+  const dispOpt = RESOLUTION_OPTIONS.find(function(r){return r.id===(c.disposition||"");});
+  return sendNotification("decision", {
+    caseRef:        c.ref,
+    participant:    c.participant || "",
+    repEmail:       c.repEmail || "",
+    planPeriod:     c.planPeriod || "",
+    trigger:        c.trigger || "",
+    disposition:    dispOpt ? dispOpt.label : "",
+    determination:  determination,
+    votesInFavor:   inf,
+    votesAgainst:   ag,
+    decidedDate:    todayStr(),
+  });
+}
+
+function notifyAppeal(c, appealData) {
+  return sendNotification("appeal", {
+    caseRef:      c.ref,
+    participant:  c.participant || "",
+    repEmail:     c.repEmail || "",
+    planPeriod:   c.planPeriod || "",
+    grounds:      (appealData.grounds || []).join(", "),
+    summary:      appealData.summary || "",
+    submittedDate: todayStr(),
+  });
 }
 
 function downloadDecisionPDF(c) {
@@ -260,7 +287,7 @@ function downloadDecisionPDF(c) {
 
   const blob = new Blob([html.join("")], {type:"text/html"});
   const url = URL.createObjectURL(blob);
-  const filename = "ICC Decision Record - Case "+c.ref+".pdf";
+  const filename = c.ref+".pdf";
   const win = window.open(url,"_blank");
   if(win) {
     win.document.title = filename;
@@ -429,6 +456,7 @@ td{padding:13px 18px;font-size:13px;border-top:1px solid #f2f5fb;color:#5a646a;v
 .copy-cite{background:none;border:1.5px solid #dce6f0;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;color:#aab4bc;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all 0.12s}
 .copy-cite:hover{border-color:#1072ba;color:#1072ba}
 .copy-cite.copied{background:#e8f5d8;color:#3a5a00;border-color:#b8d898}
+@keyframes spin{to{transform:rotate(360deg)}}
 `;
 
 function Pill({label,cls}){return <span className={"pill "+(cls||"p-gray")}>{label}</span>;}
@@ -1099,6 +1127,13 @@ function CaseDetail({c,onPatch,onBack}){
     if(c&&c.disposition) setDisposition(c.disposition);
   },[c&&c.ref]);
 
+  // Auto-load DR template when decision tab is opened and draft is still empty
+  useEffect(function(){
+    if(tab==="decision" && c && !c.decisionDraft && c.source!=="historical"){
+      onPatch(c.ref,{decisionDraft:drTemplate(c,inf,ag)});
+    }
+  },[tab]);
+
   if(!c) return <div className="page"><div className="empty">Case not found.<br/><button className="btn" style={{marginTop:12}} onClick={onBack}>Back</button></div></div>;
 
   const votes=c.votes||{};
@@ -1111,29 +1146,76 @@ function CaseDetail({c,onPatch,onBack}){
 
   function upPrep(k){return function(e){setPrep(function(p){return {...p,[k]:e.target.value};});};}
   function savePrep(){onPatch(c.ref,{...prep});}
-  function submitToCommittee(){
-    onPatch(c.ref,{...prep,status:"Open",...appendAudit(c,"Submitted to Committee by SalesOps")});
-    window.location.href=buildAcceptEmail({...c,...prep});
+  const [notifStatus,setNotifStatus]=useState(null); // null | "sending" | "sent" | "error" | "unconfigured"
+
+  function showNotifFeedback(success, unconfigured) {
+    if(unconfigured) { setNotifStatus("unconfigured"); }
+    else { setNotifStatus(success ? "sent" : "error"); }
+    setTimeout(function(){setNotifStatus(null);}, 4000);
   }
+
+  async function submitToCommittee(){
+    const merged = {...c,...prep};
+    onPatch(c.ref,{...prep,status:"Open",...appendAudit(c,"Submitted to Committee by SalesOps")});
+    setNotifStatus("sending");
+    if(!PA_WEBHOOKS.accepted) { showNotifFeedback(false, true); return; }
+    const ok = await notifyAccepted(merged);
+    showNotifFeedback(ok, false);
+  }
+
   function recordVote(member,vote){onPatch(c.ref,{votes:{...votes,[member]:vote}});}
   const [dispSaved,setDispSaved]=useState(false);
   const [showAppeal,setShowAppeal]=useState(false);
+
   function saveDisposition(){
     onPatch(c.ref,{disposition});
     setDispSaved(true);
     setTimeout(function(){setDispSaved(false);},2500);
   }
-  function finalize(){onPatch(c.ref,{status:"Decided",decided:todayStr(),disposition,...appendAudit(c,"Decision finalized. Vote: "+inf+" in favor / "+ag+" against. Disposition: "+disposition)});}
+
+  // DR validation: all 5 sections must have content before finalizing
+  function drSectionsComplete(draft) {
+    const required = ["CASE SUMMARY","POLICY ANALYSIS","COMMITTEE DELIBERATION","DISPOSITION","DETERMINATION"];
+    return required.every(function(sec){
+      const idx = (draft||"").indexOf(sec+":");
+      if(idx === -1) return false;
+      const after = (draft||"").indexOf("\n", idx) + 1;
+      const next = required.filter(function(s){return s!==sec;}).map(function(s){return (draft||"").indexOf(s+":", after);}).filter(function(i){return i > after;});
+      const end = next.length ? Math.min(...next) : (draft||"").length;
+      const content = (draft||"").substring(after, end).trim();
+      return content.length > 10; // must have at least some real content
+    });
+  }
+
+  async function finalize(){
+    if(!drSectionsComplete(c.decisionDraft)){
+      alert("All five Decision Record sections must be completed before finalizing.\n\nPlease complete: Case Summary, Policy Analysis, Committee Deliberation, Disposition, and Determination.");
+      return;
+    }
+    onPatch(c.ref,{status:"Decided",decided:todayStr(),disposition,...appendAudit(c,"Decision finalized. Vote: "+inf+" in favor / "+ag+" against. Disposition: "+disposition)});
+  }
+
   function saveCgoMemo(){onPatch(c.ref,{cgoMemo,status:"Decided",decided:todayStr()});}
+
+  // Auto-load template if DR is empty when tab is opened (handled in tab render)
   function loadTemplate(){onPatch(c.ref,{decisionDraft:drTemplate(c,inf,ag)});}
-  function rejectCase(){
+
+  async function rejectCase(){
     const reason=window.prompt("Rejection reason:\n\n1. Does not meet Tier 3 trigger criteria\n2. Insufficient information -- resubmit with supporting documentation\n3. Duplicate of an existing open case\n4. Matter resolved through other means\n5. Other");
     if(reason===null)return;
     onPatch(c.ref,{status:"Closed",rejectedReason:reason,decided:todayStr(),...appendAudit(c,"Case rejected by SalesOps. Reason: "+reason)});
-    window.location.href=buildRejectEmail({...c,...prep},reason);
+    setNotifStatus("sending");
+    if(!PA_WEBHOOKS.rejected) { showNotifFeedback(false, true); return; }
+    const ok = await notifyRejected({...c,...prep}, reason);
+    showNotifFeedback(ok, false);
   }
-  function sendDecision(){
-    window.location.href=buildDecisionEmail({...c,...prep},inf,ag);
+
+  async function sendDecision(){
+    setNotifStatus("sending");
+    if(!PA_WEBHOOKS.decision) { showNotifFeedback(false, true); return; }
+    const ok = await notifyDecision({...c,...prep}, inf, ag);
+    showNotifFeedback(ok, false);
+    if(ok) onPatch(c.ref,{...appendAudit(c,"Decision Record notification sent to rep via icc@alianza.com")});
   }
 
   const baseTabs = c.tier===2
@@ -1145,7 +1227,34 @@ function CaseDetail({c,onPatch,onBack}){
 
   return(
     <div style={{position:"relative"}}>
-      {showAppeal&&<CEOAppealModal c={c} onClose={function(){setShowAppeal(false);}} onSave={function(data){onPatch(c.ref,data);setShowAppeal(false);}}/>}
+      {showAppeal&&<CEOAppealModal c={c} onClose={function(){setShowAppeal(false);}} onSave={function(data){
+        onPatch(c.ref,data);
+        notifyAppeal(c, data.appeal||{});
+        setShowAppeal(false);
+      }}/>}
+
+      {/* Notification status banner */}
+      {notifStatus==="sending"&&(
+        <div style={{background:"#e8f4fc",borderBottom:"1px solid #b8d8f0",padding:"10px 28px",fontSize:13,color:"#17477e",display:"flex",alignItems:"center",gap:8}}>
+          <span style={{display:"inline-block",width:12,height:12,borderRadius:"50%",border:"2px solid #1072ba",borderTopColor:"transparent",animation:"spin 0.7s linear infinite"}}/>
+          Sending notification via icc@alianza.com...
+        </div>
+      )}
+      {notifStatus==="sent"&&(
+        <div style={{background:"#edf5e0",borderBottom:"1px solid #b8d898",padding:"10px 28px",fontSize:13,color:"#3a5a00",fontWeight:600}}>
+          ✓ Notification sent from icc@alianza.com
+        </div>
+      )}
+      {notifStatus==="error"&&(
+        <div style={{background:"#fce8e8",borderBottom:"1px solid #f0b8b8",padding:"10px 28px",fontSize:13,color:"#b02020",fontWeight:600}}>
+          Notification failed to send. Check the Azure Functions log and verify the Power Automate webhook URL is active.
+        </div>
+      )}
+      {notifStatus==="unconfigured"&&(
+        <div style={{background:"#fef3dc",borderBottom:"1px solid #f0d080",padding:"10px 28px",fontSize:13,color:"#8a5200"}}>
+          ⚠ Notification not sent — Power Automate webhook URL not configured. Add the URL to the PA_WEBHOOKS constant in ICCPortal.jsx.
+        </div>
+      )}
     <div className="page" style={{maxWidth:880}}>
       <button className="back-btn" onClick={onBack}>\u2190 Back to Case Dashboard</button>
 
@@ -1153,7 +1262,7 @@ function CaseDetail({c,onPatch,onBack}){
         <div className="cob cob-purple" style={{marginBottom:16}}>
           <strong>Pending Review</strong> -- Imported from the M365 intake form. Use the Case Preparation tab to add policy context, CGO opinion, and supporting documents. Click Submit to Committee when ready. To close without proceeding, use Reject below.
           <div style={{display:"flex",gap:8,marginTop:10}}>
-            <button className="btn btn-danger btn-sm" onClick={rejectCase}>Reject -- opens notification email</button>
+            <button className="btn btn-danger btn-sm" onClick={rejectCase}>Reject — send not-escalated notification</button>
           </div>
         </div>
       )}
@@ -1185,7 +1294,7 @@ function CaseDetail({c,onPatch,onBack}){
           {c.status==="Decided"&&!c.appealStatus&&<button className="btn btn-sm" style={{borderColor:"#f0d080",color:"#8a5200",background:"#fef3dc"}} onClick={function(){setShowAppeal(true);}}>Escalate to CEO Review</button>}
           {c.appealStatus&&<span style={{fontSize:11,fontWeight:700,background:"#f5eefa",color:"#5a2090",border:"1px solid #d8b8f0",borderRadius:20,padding:"4px 12px"}}>Appeal: {c.appealStatus} {c.appealDate||""}</span>}
           {c.status==="Decided"&&(
-            <button className="btn btn-sm" onClick={sendDecision}>Send Decision to Rep</button>
+            <button className="btn btn-sm" onClick={sendDecision}>Send Decision Notification</button>
           )}
         </div>
       </div>
@@ -1285,7 +1394,7 @@ function CaseDetail({c,onPatch,onBack}){
           <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
             <button className="btn btn-sm" onClick={savePrep}>Save Progress</button>
             {isPending&&(
-              <button className="btn btn-ok" onClick={submitToCommittee}>Submit to Committee -- opens acceptance email</button>
+              <button className="btn btn-ok" onClick={submitToCommittee}>Submit to Committee — sends acceptance notification</button>
             )}
           </div>
         </div>
@@ -1470,6 +1579,7 @@ function CaseDetail({c,onPatch,onBack}){
           </div>
         </div>
       )}
+    </div>
     </div>
     </div>
   );

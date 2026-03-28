@@ -135,47 +135,28 @@ function drTemplate(c, inf, ag) {
   return lines.join("\n");
 }
 
-// ── POWER AUTOMATE NOTIFICATION LAYER ────────────────────────────────────────
-// Paste your Power Automate HTTP trigger URLs here after creating each flow.
-// Leave as empty string ("") until the flow is live -- the portal will fall
-// back gracefully and log a console warning instead of throwing an error.
-const PA_WEBHOOKS = {
-  accepted:  "",   // Flow: "ICC -- Case Accepted notification"
-  rejected:  "",   // Flow: "ICC -- Case Not Escalated notification"
-  decision:  "",   // Flow: "ICC -- Decision Record delivered"
-  appeal:    "",   // Flow: "ICC -- Appeal received (CEO office)"
-  slaReminder: "", // Flow: "ICC -- SLA Day-10 reminder" (triggered by PA schedule, not portal)
-};
+// ── NOTIFICATION LAYER — Azure Functions → Microsoft Graph → icc@alianza.com ──
+// All notifications route through the sendMail Azure Function, which authenticates
+// to Microsoft Graph and sends from icc@alianza.com. No Power Automate required.
 
-// Central notification dispatcher. All notifications go through here.
-// On success: returns true. On failure: logs error, returns false.
-// The portal never blocks the user on a notification failure.
-async function sendNotification(type, payload) {
-  const url = PA_WEBHOOKS[type];
-  if(!url) {
-    console.warn("ICC Portal: PA webhook for '"+type+"' is not configured. Notification not sent.");
-    return false;
-  }
+async function sendNotification(type, data) {
   try {
-    const res = await fetch(url, {
+    const res = await fetch(API+"/sendMail", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ type, data }),
     });
     if(!res.ok) {
-      console.error("ICC Portal: PA webhook '"+type+"' returned HTTP "+res.status);
+      const err = await res.json().catch(function(){return {};});
+      console.error("ICC Portal: sendMail returned HTTP "+res.status, err);
       return false;
     }
     return true;
   } catch(e) {
-    console.error("ICC Portal: PA webhook '"+type+"' call failed:", e.message);
+    console.error("ICC Portal: sendMail call failed:", e.message);
     return false;
   }
 }
-
-// Notification payload builders -- these define what Power Automate receives.
-// PA uses these fields to populate the email body. Add fields freely; PA reads
-// whatever you send and you configure the email template on the PA side.
 
 function notifyAccepted(c) {
   return sendNotification("accepted", {
@@ -1147,11 +1128,10 @@ function CaseDetail({c,onPatch,onBack}){
 
   function upPrep(k){return function(e){setPrep(function(p){return {...p,[k]:e.target.value};});};}
   function savePrep(){onPatch(c.ref,{...prep});}
-  const [notifStatus,setNotifStatus]=useState(null); // null | "sending" | "sent" | "error" | "unconfigured"
+  const [notifStatus,setNotifStatus]=useState(null); // null | "sending" | "sent" | "error"
 
-  function showNotifFeedback(success, unconfigured) {
-    if(unconfigured) { setNotifStatus("unconfigured"); }
-    else { setNotifStatus(success ? "sent" : "error"); }
+  function showNotifFeedback(success) {
+    setNotifStatus(success ? "sent" : "error");
     setTimeout(function(){setNotifStatus(null);}, 4000);
   }
 
@@ -1159,7 +1139,6 @@ function CaseDetail({c,onPatch,onBack}){
     const merged = {...c,...prep};
     onPatch(c.ref,{...prep,status:"Open",...appendAudit(c,"Submitted to Committee by SalesOps")});
     setNotifStatus("sending");
-    if(!PA_WEBHOOKS.accepted) { showNotifFeedback(false, true); return; }
     const ok = await notifyAccepted(merged);
     showNotifFeedback(ok, false);
   }
@@ -1206,14 +1185,12 @@ function CaseDetail({c,onPatch,onBack}){
     if(reason===null)return;
     onPatch(c.ref,{status:"Closed",rejectedReason:reason,decided:todayStr(),...appendAudit(c,"Case rejected by SalesOps. Reason: "+reason)});
     setNotifStatus("sending");
-    if(!PA_WEBHOOKS.rejected) { showNotifFeedback(false, true); return; }
     const ok = await notifyRejected({...c,...prep}, reason);
     showNotifFeedback(ok, false);
   }
 
   async function sendDecision(){
     setNotifStatus("sending");
-    if(!PA_WEBHOOKS.decision) { showNotifFeedback(false, true); return; }
     const ok = await notifyDecision({...c,...prep}, inf, ag);
     showNotifFeedback(ok, false);
     if(ok) onPatch(c.ref,{...appendAudit(c,"Decision Record notification sent to rep via icc@alianza.com")});
@@ -1248,12 +1225,7 @@ function CaseDetail({c,onPatch,onBack}){
       )}
       {notifStatus==="error"&&(
         <div style={{background:"#fce8e8",borderBottom:"1px solid #f0b8b8",padding:"10px 28px",fontSize:13,color:"#b02020",fontWeight:600}}>
-          Notification failed to send. Check the Azure Functions log and verify the Power Automate webhook URL is active.
-        </div>
-      )}
-      {notifStatus==="unconfigured"&&(
-        <div style={{background:"#fef3dc",borderBottom:"1px solid #f0d080",padding:"10px 28px",fontSize:13,color:"#8a5200"}}>
-          ⚠ Notification not sent — Power Automate webhook URL not configured. Add the URL to the PA_WEBHOOKS constant in ICCPortal.jsx.
+          Notification failed to send. Check the Azure Functions log for details.
         </div>
       )}
     <div className="page" style={{maxWidth:880}}>

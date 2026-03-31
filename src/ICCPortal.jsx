@@ -18,7 +18,7 @@ const TIER_CLS = { 1:"p-green", 2:"p-gold", 3:"p-blue" };
 const STATUS_COLOR = {
   "Open":"#1072ba","In Review":"#fdb73e",
   "Decided":"#8bad44","Closed":"#5a646a","Pending Review":"#9b59b6",
-  "Under Appeal":"#e67e22",
+  "Under Appeal":"#e67e22","Finalized":"#2ecc71",
 };
 const EMPTY_FORM = {
   participant:"",role:"",manager:"",planPeriod:"2026 1H",
@@ -244,6 +244,32 @@ function notifyAppeal(c, appealData) {
   });
 }
 
+// Generate a simple exec token — caseRef + date hash stored on case
+function generateExecToken(ref) {
+  const str = ref + "-paul-exec-" + new Date().toISOString().split("T")[0];
+  let hash = 0;
+  for(let i=0;i<str.length;i++){hash=((hash<<5)-hash)+str.charCodeAt(i);hash|=0;}
+  return Math.abs(hash).toString(36);
+}
+
+function notifyCommOpsExecution(c, execToken) {
+  const API_BASE = "https://icc-portal-api-anh3fnfabvfreabs.centralus-01.azurewebsites.net/api";
+  const execUrl = API_BASE+"/updateCase?ref="+encodeURIComponent(c.ref)+"&action=executed&token="+execToken;
+  const dispOpt = RESOLUTION_OPTIONS.find(function(r){return r.id===(c.disposition||"");});
+  return sendNotification("commops_execution", {
+    caseRef:       c.ref,
+    participant:   c.participant||"",
+    repEmail:      "paul.kim@alianza.com",
+    planPeriod:    c.planPeriod||"",
+    disposition:   dispOpt?dispOpt.label:"See Decision Record",
+    approvedAmount: c.committeeApprovedAmount||"",
+    effectiveDate:  c.committeeEffectiveDate||"",
+    conditions:     c.committeeConditions||"",
+    execUrl,
+    decidedDate:    c.decided||todayStr(),
+  });
+}
+
 function downloadDecisionPDF(c) {
   const determination = (c.decisionDraft||"").split("\n").find(function(l){return l.startsWith("DETERMINATION:");}) || "";
   const html = [
@@ -309,15 +335,15 @@ function downloadDecisionPDF(c) {
 
   const blob = new Blob([html.join("")], {type:"text/html"});
   const url = URL.createObjectURL(blob);
-  const filename = c.ref+".pdf";
-  const win = window.open(url,"_blank");
-  if(win) {
-    win.document.title = filename;
-    win.onload = function(){
-      win.print();
-      setTimeout(function(){URL.revokeObjectURL(url);}, 2000);
-    };
-  }
+  const filename = c.ref+" -- Decision Record.html";
+  // Use anchor download to preserve filename — avoids blob URL as tab title
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url);}, 2000);
 }
 
 const API = "https://icc-portal-api-anh3fnfabvfreabs.centralus-01.azurewebsites.net/api";
@@ -690,10 +716,39 @@ function CaseEnrichmentModal({c, onSave, onClose}){
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function Dashboard({cases,onGo,onImport}){
   const [showImport,setShowImport]=useState(false);
+  const [sortField,setSortField]=useState("opened");
+  const [sortDir,setSortDir]=useState("desc");
   const open=cases.filter(function(c){return ["Open","In Review","Pending Review","Under Appeal"].includes(c.status);}).length;
   const pending=cases.filter(function(c){return c.status==="Pending Review";}).length;
   const underAppeal=cases.filter(function(c){return c.status==="Under Appeal";}).length;
   function handleImport(parsed){setShowImport(false);onImport(parsed);}
+
+  function toggleSort(field){
+    if(sortField===field) setSortDir(function(d){return d==="asc"?"desc":"asc";});
+    else {setSortField(field);setSortDir("asc");}
+  }
+
+  const sorted = [...cases].sort(function(a,b){
+    let av="",bv="";
+    if(sortField==="ref"){av=a.ref||"";bv=b.ref||"";}
+    else if(sortField==="participant"){av=a.participant||"";bv=b.participant||"";}
+    else if(sortField==="status"){av=a.status||"";bv=b.status||"";}
+    else if(sortField==="tier"){av=a.tier||0;bv=b.tier||0;}
+    else if(sortField==="sla"){av=slaDay(a);bv=slaDay(b);}
+    else if(sortField==="opened"){av=a.opened||"";bv=b.opened||"";}
+    if(av<bv) return sortDir==="asc"?-1:1;
+    if(av>bv) return sortDir==="asc"?1:-1;
+    return 0;
+  });
+
+  function SortTh({field,label}){
+    const active=sortField===field;
+    return(
+      <th style={{cursor:"pointer",userSelect:"none",whiteSpace:"nowrap"}} onClick={function(){toggleSort(field);}}>
+        {label}{active?(sortDir==="asc"?" ↑":" ↓"):" ↕"}
+      </th>
+    );
+  }
   return(
     <div style={{position:"relative"}}>
       {showImport&&<ImportModal onImport={handleImport} onClose={function(){setShowImport(false);}}/>}
@@ -728,8 +783,17 @@ function Dashboard({cases,onGo,onImport}){
           </div>
           {cases.length===0
             ?<div className="empty"><div style={{fontSize:22,marginBottom:8}}>◎</div><div style={{fontSize:13,fontWeight:500}}>No cases yet</div><div style={{fontSize:11,marginTop:4}}>Open a new case or import from the M365 intake form.</div></div>
-            :<table><thead><tr><th>Reference</th><th>Participant</th><th>Trigger</th><th>Tier</th><th>Status</th><th>SLA</th><th>Source</th><th>Opened</th></tr></thead>
-              <tbody>{cases.map(function(c){return(
+            :<table><thead><tr>
+              <SortTh field="ref" label="Reference"/>
+              <SortTh field="participant" label="Participant"/>
+              <th>Trigger</th>
+              <SortTh field="tier" label="Tier"/>
+              <SortTh field="status" label="Status"/>
+              <SortTh field="sla" label="SLA"/>
+              <th>Source</th>
+              <SortTh field="opened" label="Opened"/>
+            </tr></thead>
+              <tbody>{sorted.map(function(c){return(
                 <tr key={c.ref} className="trow" onClick={function(){onGo("detail",c.ref);}}>
                   <td style={{fontFamily:"monospace",fontSize:11,fontWeight:600,color:"#17477e"}}>{c.ref}</td>
                   <td>{c.participant||"—"}</td>
@@ -1180,6 +1244,100 @@ function AmendModal({c, onClose, onSave}){
 }
 
 // ── CASE DETAIL ───────────────────────────────────────────────────────────────
+// ── CEO DETERMINATION MODAL ───────────────────────────────────────────────────
+function CEODeterminationModal({c, onClose, onSave}) {
+  const [outcome,setOutcome]=useState("");
+  const [summary,setSummary]=useState("");
+  const [modifiedAmount,setModifiedAmount]=useState("");
+  const [modifiedDate,setModifiedDate]=useState("");
+  const [remandNote,setRemandNote]=useState("");
+  const [decisionDate,setDecisionDate]=useState(todayStr());
+  const [saving,setSaving]=useState(false);
+
+  const canSave = outcome && summary.trim().length > 10;
+
+  async function handleSave(){
+    if(!canSave) return;
+    setSaving(true);
+    const det = {
+      ceoDetermination: summary,
+      ceoOutcome: outcome,
+      ceoDecisionDate: decisionDate,
+      ceoModifiedAmount: modifiedAmount,
+      ceoModifiedDate: modifiedDate,
+      ceoRemandNote: remandNote,
+      appealStatus: "Decided",
+      status: outcome==="Remand" ? "In Review" : "Finalized",
+    };
+    await onSave(det);
+    setSaving(false);
+    onClose();
+  }
+
+  return(
+    <div className="modal-backdrop" onClick={function(e){if(e.target===e.currentTarget)onClose();}}>
+      <div className="modal" style={{width:660}}>
+        <div className="modal-title">Record CEO Determination</div>
+        <div className="modal-sub">Record the CEO's final ruling on the Plan Interpretation Review. This will archive the determination, notify the rep, and close the appeal.</div>
+
+        <div style={{background:"#fef3dc",border:"1px solid #fde5b8",borderRadius:8,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#8a5200"}}>
+          <strong>CEO determination is final.</strong> Once recorded, the case will move to Finalized and no further appeals are available.
+        </div>
+
+        <SBar label="Outcome"/>
+        {[
+          {id:"Affirm",label:"Affirm Ruling",desc:"The CEO affirms the Committee's original decision. The Decision Record stands as issued."},
+          {id:"Modify",label:"Modify Ruling",desc:"The CEO modifies the Committee's decision. Enter the revised amount and effective date below."},
+          {id:"Remand",label:"Remand to Committee",desc:"The CEO returns the matter to the Committee for reconsideration with specific instructions."},
+        ].map(function(opt){return(
+          <div key={opt.id} className="equity-check" style={{cursor:"pointer",borderColor:outcome===opt.id?"#1072ba":"#dce6f0",background:outcome===opt.id?"#e8f4fc":"white",marginBottom:8}} onClick={function(){setOutcome(opt.id);}}>
+            <input type="radio" checked={outcome===opt.id} onChange={function(){setOutcome(opt.id);}} style={{marginTop:2,accentColor:"#1072ba",width:16,height:16,flexShrink:0}}/>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:"#17477e",marginBottom:2}}>{opt.label}</div>
+              <div className="equity-check-text">{opt.desc}</div>
+            </div>
+          </div>
+        );})}
+
+        {outcome==="Modify"&&(
+          <div className="fr" style={{marginTop:8}}>
+            <div className="fg"><label className="lbl">Revised Amount ($)</label>
+              <input className="inp" value={modifiedAmount} onChange={function(e){setModifiedAmount(e.target.value);}} placeholder="e.g. 52,000.00"/>
+            </div>
+            <div className="fg"><label className="lbl">Revised Effective Date</label>
+              <input className="inp" value={modifiedDate} onChange={function(e){setModifiedDate(e.target.value);}} placeholder="M/DD/YYYY"/>
+            </div>
+          </div>
+        )}
+
+        {outcome==="Remand"&&(
+          <div className="fg" style={{marginTop:8}}>
+            <label className="lbl">Remand Instructions</label>
+            <textarea className="ta" rows={3} value={remandNote} onChange={function(e){setRemandNote(e.target.value);}} placeholder="Describe what the Committee must reconsider and any specific instructions from the CEO."/>
+          </div>
+        )}
+
+        <SBar label="Determination Summary"/>
+        <div className="fg">
+          <label className="lbl">CEO Statement *</label>
+          <textarea className="ta" rows={5} value={summary} onChange={function(e){setSummary(e.target.value);}} placeholder="Summarize the CEO's determination and reasoning. This will appear in the archived CEO Determination document and the rep notification email."/>
+        </div>
+        <div className="fg">
+          <label className="lbl">Date of Determination</label>
+          <input className="inp" value={decisionDate} onChange={function(e){setDecisionDate(e.target.value);}} placeholder="M/DD/YYYY"/>
+        </div>
+
+        <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:8}}>
+          <button className="btn btn-sm" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn btn-p btn-sm" onClick={handleSave} disabled={!canSave||saving} style={{opacity:canSave&&!saving?1:0.5}}>
+            {saving?"Saving...":"Record Determination + Notify Rep"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CaseDetail({c,onPatch,onBack}){
   const [tab,setTab]=useState("overview");
   const [cgoMemo,setCgoMemo]=useState({resolution:"",payoutImpact:"",effectiveDate:"",methodology:"",precedentRef:"",equityChecks:{}});
@@ -1231,7 +1389,33 @@ function CaseDetail({c,onPatch,onBack}){
   const allEquityChecked=cgoMemo.equityChecks[0]&&cgoMemo.equityChecks[1]&&cgoMemo.equityChecks[2]&&cgoMemo.equityChecks[3];
 
   function upPrep(k){return function(e){setPrep(function(p){return {...p,[k]:e.target.value};});};}
-  function savePrep(){onPatch(c.ref,{...prep});}
+  const [prepSaved,setPrepSaved]=useState(false);
+  const [stmtSaved,setStmtSaved]=useState(false);
+  const [cgoSaved,setCgoSaved]=useState(false);
+  const [preflightError,setPreflightError]=useState(null);
+
+  function savePrep(){
+    onPatch(c.ref,{...prep});
+    setPrepSaved(true);
+    setTimeout(function(){setPrepSaved(false);},2500);
+  }
+
+  // Pre-flight check before any notification fires
+  function preflightCheck(requiredFields) {
+    const missing = [];
+    const repEmail = prep.repEmail||c.repEmail||"";
+    if(requiredFields.includes("repEmail") && !repEmail) missing.push("Rep email (add in Case Preparation)");
+    if(requiredFields.includes("disposition") && !disposition) missing.push("Disposition (select in Committee Action)");
+    if(requiredFields.includes("decisionDraft") && !drSectionsComplete(c.decisionDraft)) missing.push("All 5 Decision Record sections must be complete");
+    if(missing.length) {
+      setPreflightError("Cannot send — missing: " + missing.join("; "));
+      setTimeout(function(){setPreflightError(null);},6000);
+      return false;
+    }
+    setPreflightError(null);
+    return true;
+  }
+
   const [notifStatus,setNotifStatus]=useState(null); // null | "sending" | "sent" | "error"
 
   function showNotifFeedback(success) {
@@ -1240,6 +1424,7 @@ function CaseDetail({c,onPatch,onBack}){
   }
 
   async function submitToCommittee(){
+    if(!preflightCheck(["repEmail"])) return;
     const merged = {...c,...prep};
     onPatch(c.ref,{...prep,status:"Open",...appendAudit(c,"Submitted to Committee by SalesOps")});
     setNotifStatus("sending");
@@ -1251,6 +1436,7 @@ function CaseDetail({c,onPatch,onBack}){
   const [dispSaved,setDispSaved]=useState(false);
   const [showAppeal,setShowAppeal]=useState(false);
   const [showAmend,setShowAmend]=useState(false);
+  const [showCEODet,setShowCEODet]=useState(false);
   const [drReloaded,setDrReloaded]=useState(false);
 
   function saveDisposition(){
@@ -1278,18 +1464,20 @@ function CaseDetail({c,onPatch,onBack}){
       alert("All five Decision Record sections must be completed before finalizing.\n\nPlease complete: Case Summary, Policy Analysis, Committee Deliberation, Disposition, and Determination.");
       return;
     }
+    const execToken = generateExecToken(c.ref);
     const decidedCase = {
       ...c,
       status:"Decided",
       decided:todayStr(),
       disposition,
+      execToken,
     };
-    onPatch(c.ref,{status:"Decided",decided:todayStr(),disposition,...appendAudit(c,"Decision finalized. Vote: "+inf+" in favor / "+ag+" against. Disposition: "+disposition)});
+    onPatch(c.ref,{status:"Decided",decided:todayStr(),disposition,execToken,...appendAudit(c,"Decision finalized. Vote: "+inf+" in favor / "+ag+" against. Disposition: "+disposition)});
     // Archive Decision Record to SharePoint
     const fileUrl = await apiArchive("decision", decidedCase);
-    if(fileUrl) {
-      onPatch(c.ref,{archivedDecisionUrl:fileUrl,...appendAudit(c,"Decision Record archived to ICC SharePoint archive.")});
-    }
+    if(fileUrl) onPatch(c.ref,{archivedDecisionUrl:fileUrl,...appendAudit(c,"Decision Record archived to ICC SharePoint archive.")});
+    // Send CommOps execution email with Mark as Executed link
+    await notifyCommOpsExecution(decidedCase, execToken);
   }
 
   async function saveCgoMemo(){
@@ -1315,6 +1503,7 @@ function CaseDetail({c,onPatch,onBack}){
   }
 
   async function sendDecision(){
+    if(!preflightCheck(["repEmail","disposition"])) return;
     setNotifStatus("sending");
     const ok = await notifyDecision({...c,...prep}, inf, ag);
     showNotifFeedback(ok, false);
@@ -1330,6 +1519,25 @@ function CaseDetail({c,onPatch,onBack}){
 
   return(
     <div style={{position:"relative"}}>
+      {showCEODet&&<CEODeterminationModal c={c} onClose={function(){setShowCEODet(false);}} onSave={async function(det){
+        const updatedCase = {...c,...det};
+        onPatch(c.ref,{...det,...appendAudit(c,"CEO determination recorded: "+det.ceoOutcome+". ("+det.ceoDecisionDate+")")});
+        // Archive CEO determination
+        const fileUrl = await apiArchive("ceo_determination", updatedCase);
+        if(fileUrl) onPatch(c.ref,{archivedCeoUrl:fileUrl});
+        // Notify rep
+        await sendNotification("ceo_determination",{
+          caseRef:       c.ref,
+          participant:   c.participant||"",
+          repEmail:      prep.repEmail||c.repEmail||"",
+          planPeriod:    c.planPeriod||"",
+          outcome:       det.ceoOutcome,
+          summary:       det.ceoDetermination,
+          decisionDate:  det.ceoDecisionDate,
+          modifiedAmount: det.ceoModifiedAmount||"",
+          modifiedDate:  det.ceoModifiedDate||"",
+        });
+      }}/>}
       {showAppeal&&<CEOAppealModal c={c} onClose={function(){setShowAppeal(false);}} onSave={async function(data){
         const updatedCase = {
           ...c,
@@ -1419,17 +1627,22 @@ function CaseDetail({c,onPatch,onBack}){
             })()}
           </div>
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           {c.status!=="Decided"&&c.status!=="Closed"&&!isPending&&decided&&c.tier===3&&(
             <button className="btn btn-p btn-sm" onClick={finalize}>Finalize Decision</button>
           )}
           {c.status==="Decided"&&<button className="btn btn-sm" onClick={function(){downloadDecisionPDF(c);}}>Download Decision Record</button>}
           {c.status==="Decided"&&<button className="btn btn-sm" style={{borderColor:"#e8d0f0",color:"#5a2090",background:"#f5eefa"}} onClick={function(){setShowAmend(true);}}>Amend Decision Record</button>}
           {c.status==="Decided"&&!c.appealStatus&&<button className="btn btn-sm" style={{borderColor:"#f0d080",color:"#8a5200",background:"#fef3dc"}} onClick={function(){setShowAppeal(true);}}>Escalate to CEO Review</button>}
+          {c.status==="Under Appeal"&&!c.ceoDetermination&&(
+            <button className="btn btn-p btn-sm" style={{background:"#5a2090",borderColor:"#5a2090"}} onClick={function(){setShowCEODet(true);}}>Record CEO Determination</button>
+          )}
           {c.appealStatus&&<span style={{fontSize:11,fontWeight:700,background:"#f5eefa",color:"#5a2090",border:"1px solid #d8b8f0",borderRadius:20,padding:"4px 12px"}}>Appeal: {c.appealStatus} {c.appealDate||""}</span>}
+          {c.executionStatus==="Executed"&&<span style={{fontSize:11,fontWeight:700,background:"#edf5e0",color:"#3a5a00",border:"1px solid #b8d898",borderRadius:20,padding:"4px 12px"}}>✓ Executed {c.executedDate||""}</span>}
           {c.status==="Decided"&&(
             <button className="btn btn-sm" onClick={sendDecision}>Send Decision Notification</button>
           )}
+          {preflightError&&<span style={{fontSize:11,color:"#e24b4a",fontWeight:600,marginLeft:4}}>{preflightError}</span>}
         </div>
       </div>
 
@@ -1568,8 +1781,34 @@ function CaseDetail({c,onPatch,onBack}){
             <input className="inp" value={prep.docLink} onChange={upPrep("docLink")} placeholder="Paste a sharing link to supporting documents (contracts, booking records, commission statements)"/>
             <div style={{fontSize:10,color:"#8a969c",marginTop:4}}>Upload to SharePoint first, then paste the link. Accessible to all Committee members from Case Overview.</div>
           </div>
-          <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
-            <button className="btn btn-sm" onClick={savePrep}>Save Progress</button>
+          <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8,flexWrap:"wrap"}}>
+            {preflightError&&<span style={{fontSize:11,color:"#e24b4a",alignSelf:"center",maxWidth:340}}>{preflightError}</span>}
+            <button className={"btn btn-sm"+(prepSaved?" btn-ok":"")} onClick={savePrep}>{prepSaved?"Saved ✓":"Save Progress"}</button>
+            {!isPending&&(
+              <button className="btn btn-sm" style={{borderColor:"#1072ba",color:"#1072ba"}} onClick={async function(){
+                if(!preflightCheck(["repEmail"])) return;
+                setNotifStatus("sending");
+                const ok = await sendNotification("case_prep_package",{
+                  caseRef:       c.ref,
+                  participant:   c.participant||"",
+                  repEmail:      prep.repEmail||c.repEmail||"",
+                  planPeriod:    c.planPeriod||"",
+                  trigger:       c.trigger||"",
+                  tier:          c.tier?"Tier "+c.tier:"",
+                  dealValue:     c.dealValue||"",
+                  compClaimed:   c.compClaimed||"",
+                  compCalculated:c.compCalculated||"",
+                  policyIssue:   prep.policyIssue||c.policyIssue||"",
+                  cgoOpinion:    prep.cgoOpinion||c.cgoOpinion||"",
+                  advisory:      prep.advisory||c.advisory||"",
+                  repStatement:  (c.repStatement&&c.repStatement.statement)||"",
+                  docLink:       prep.docLink||c.docLink||"",
+                  slaDay:        slaDay(c),
+                });
+                showNotifFeedback(ok);
+                if(ok) onPatch(c.ref,{...appendAudit(c,"Case Prep Package sent to Committee members.")});
+              }}>Send Case Prep Package to Committee</button>
+            )}
             {isPending&&(
               <button className="btn btn-ok" onClick={submitToCommittee}>Submit to Committee — sends acceptance notification</button>
             )}
@@ -1657,10 +1896,12 @@ function CaseDetail({c,onPatch,onBack}){
             }} placeholder="Paste the rep's written statement here, or summarize the key factual assertions they have made. This becomes part of the official case record and will be available to Committee members during deliberation."/>
           </div>
           <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:8}}>
-            <button className="btn btn-sm" onClick={function(){
+            <button className={"btn btn-sm"+(stmtSaved?" btn-ok":"")} onClick={function(){
               const updated = {...repStatement};
               onPatch(c.ref,{repStatement:updated,...appendAudit(c,"Rep statement updated in case record.")});
-            }}>Save Statement</button>
+              setStmtSaved(true);
+              setTimeout(function(){setStmtSaved(false);},2500);
+            }}>{stmtSaved?"Saved ✓":"Save Statement"}</button>
           </div>
         </div>
       )}
@@ -1698,8 +1939,12 @@ function CaseDetail({c,onPatch,onBack}){
           <Cob variant="gold">All four items must be checked before saving.</Cob>
           <EquityAttestation checks={cgoMemo.equityChecks} onChange={function(v){setCgoMemo(function(p){return {...p,equityChecks:v};});}}/>
           <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}>
-            <button className="btn btn-p" onClick={saveCgoMemo} disabled={!cgoMemo.resolution||!cgoMemo.methodology||!allEquityChecked}>
-              {!allEquityChecked?"Complete equity attestation to save":"Save Memo and Close Case"}
+            <button className={"btn btn-p"+(cgoSaved?" btn-ok":"")} onClick={async function(){
+              await saveCgoMemo();
+              setCgoSaved(true);
+              setTimeout(function(){setCgoSaved(false);},2500);
+            }} disabled={!cgoMemo.resolution||!cgoMemo.methodology||!allEquityChecked}>
+              {cgoSaved?"Saved ✓":!allEquityChecked?"Complete equity attestation to save":"Save Memo and Close Case"}
             </button>
           </div>
         </div>
@@ -1771,7 +2016,6 @@ function CaseDetail({c,onPatch,onBack}){
 
               {disposition&&c.status!=="Decided"&&(
                 <div style={{display:"flex",gap:10,justifyContent:"flex-end",alignItems:"center",marginTop:8}}>
-                  {dispSaved&&<span style={{fontSize:11,color:"#3a5a00"}}>Saved ✓</span>}
                   <button className={"btn btn-sm"+(dispSaved?" btn-ok":"")} onClick={function(){
                     onPatch(c.ref,{
                       disposition,
@@ -1784,6 +2028,13 @@ function CaseDetail({c,onPatch,onBack}){
                     setTimeout(function(){setDispSaved(false);},2500);
                   }}>
                     {dispSaved?"Saved ✓":"Save Ruling Details"}
+                  </button>
+                </div>
+              )}
+              {disposition&&c.status!=="Decided"&&decided&&(
+                <div style={{marginTop:12,borderTop:"1px solid #edf2f8",paddingTop:12,display:"flex",justifyContent:"flex-end"}}>
+                  <button className="btn btn-p" onClick={function(){setTab("decision");}}>
+                    Go to Decision Record →
                   </button>
                 </div>
               )}
@@ -1927,52 +2178,46 @@ function fallbackCopy(text, ref) {
 // ── PRECEDENTS ────────────────────────────────────────────────────────────────
 function Precedents({cases,onAddHistorical,onGo}){
   const [showModal,setShowModal]=useState(false);
-  const [search,setSearch]=useState("");
   const [filterTrigger,setFilterTrigger]=useState("");
   const [filterRes,setFilterRes]=useState("");
+  const [filterPeriod,setFilterPeriod]=useState("");
+  const [expanded,setExpanded]=useState(null);
   const [copiedRef,setCopiedRef]=useState(null);
 
-  const ps=cases.filter(function(c){return (c.status==="Decided"||c.source==="historical")&&c.decisionDraft;});
+  const ps=cases.filter(function(c){return (c.status==="Decided"||c.status==="Finalized"||c.source==="historical")&&(c.decisionDraft||c.cgoMemo);});
+  const periods=[...new Set(ps.map(function(c){return c.planPeriod;}).filter(Boolean))].sort().reverse();
 
   const filtered=ps.filter(function(c){
-    const matchSearch=!search||
-      (c.ref&&c.ref.toLowerCase().includes(search.toLowerCase()))||
-      (c.participant&&c.participant.toLowerCase().includes(search.toLowerCase()))||
-      (c.decisionDraft&&c.decisionDraft.toLowerCase().includes(search.toLowerCase()));
     const matchTrigger=!filterTrigger||c.trigger===filterTrigger;
-    const matchRes=!filterRes||(c.cgoMemo&&c.cgoMemo.resolution===filterRes);
-    return matchSearch&&matchTrigger&&matchRes;
-  });
+    const matchRes=!filterRes||((c.disposition||(c.cgoMemo&&c.cgoMemo.resolution)||""))===filterRes;
+    const matchPeriod=!filterPeriod||c.planPeriod===filterPeriod;
+    return matchTrigger&&matchRes&&matchPeriod;
+  }).sort(function(a,b){return (b.decided||b.opened||"").localeCompare(a.decided||a.opened||"");});
 
   function copyRef(c){
-    const res=c.cgoMemo&&c.cgoMemo.resolution
-      ? RESOLUTION_OPTIONS.find(function(r){return r.id===c.cgoMemo.resolution;})
-      : null;
-    const determination=(c.decisionDraft||"").split("\n").find(function(l){return l.startsWith("DETERMINATION:");}) || "";
+    const res=c.disposition||(c.cgoMemo&&c.cgoMemo.resolution)||"";
+    const resOpt=RESOLUTION_OPTIONS.find(function(r){return r.id===res;});
+    const det=extractDRSection(c.decisionDraft||"","DETERMINATION")||c.decisionDraft||"";
     const lines=[
-      c.ref+" -- "+(c.trigger||"Unknown trigger")+" -- "+(c.planPeriod||""),
-      "Resolution: "+(res?res.label:"See decision record"),
-      determination,
+      c.ref+" -- "+(c.trigger||"Unknown")+" -- "+(c.planPeriod||""),
+      "Resolution: "+(resOpt?resOpt.label:"See decision record"),
+      "Approved amount: $"+(c.committeeApprovedAmount||"[see record]"),
+      "One-line ruling: "+det.split("\n").find(function(l){return l.trim().length>10;})||"",
       "Consistent with this ruling: Yes / No -- if No, explain:",
     ];
     const text=lines.join("\n");
     try {
-      if(navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(function(){
-          setCopiedRef(c.ref);
-          setTimeout(function(){setCopiedRef(null);},2000);
-        }).catch(function(){
-          fallbackCopy(text, c.ref);
-        });
-      } else {
-        fallbackCopy(text, c.ref);
-      }
-    } catch(e) {
-      fallbackCopy(text, c.ref);
-    }
+      navigator.clipboard.writeText(text).then(function(){
+        setCopiedRef(c.ref);
+        setTimeout(function(){setCopiedRef(null);},2500);
+      }).catch(function(){fallbackCopy(text,c.ref);});
+    } catch(e){fallbackCopy(text,c.ref);}
   }
 
   function handleSave(entry){setShowModal(false);onAddHistorical(entry);}
+
+  // Active filters count
+  const activeFilters=[filterTrigger,filterRes,filterPeriod].filter(Boolean).length;
 
   return(
     <div style={{position:"relative"}}>
@@ -1982,61 +2227,117 @@ function Precedents({cases,onAddHistorical,onGo}){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
           <div>
             <div className="page-title">Precedent Register</div>
-            <div className="page-sub" style={{marginBottom:0}}>Search for a prior ruling, then click Copy Reference to paste into a CGO memo.</div>
+            <div className="page-sub" style={{marginBottom:0}}>{ps.length} decided cases. Filter by trigger type to find relevant prior rulings. Click Copy Reference to cite in a CGO memo.</div>
           </div>
           <button className="btn btn-sm" style={{flexShrink:0,marginTop:4}} onClick={function(){setShowModal(true);}}>+ Add Historical</button>
         </div>
 
-        <div className="search-bar">
-          <input className="inp" style={{flex:1}} value={search} onChange={function(e){setSearch(e.target.value);}} placeholder="Search by reference, participant, or keyword..."/>
-          <select className="sel" style={{width:220}} value={filterTrigger} onChange={function(e){setFilterTrigger(e.target.value);}}>
+        {/* Filter bar */}
+        <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+          <select className="sel" style={{flex:1,minWidth:200}} value={filterTrigger} onChange={function(e){setFilterTrigger(e.target.value);}}>
             <option value="">All trigger types</option>
-            {TRIGGERS.map(function(t){return <option key={t} value={t}>{t.slice(0,32)}</option>;})}
+            {TRIGGERS.map(function(t){return <option key={t} value={t}>{t}</option>;})}
           </select>
-          <select className="sel" style={{width:200}} value={filterRes} onChange={function(e){setFilterRes(e.target.value);}}>
+          <select className="sel" style={{flex:1,minWidth:180}} value={filterRes} onChange={function(e){setFilterRes(e.target.value);}}>
             <option value="">All resolutions</option>
-            {RESOLUTION_OPTIONS.map(function(r){return <option key={r.id} value={r.id}>{r.label.slice(0,28)}</option>;})}
+            {RESOLUTION_OPTIONS.map(function(r){return <option key={r.id} value={r.id}>{r.label}</option>;})}
           </select>
+          <select className="sel" style={{width:140}} value={filterPeriod} onChange={function(e){setFilterPeriod(e.target.value);}}>
+            <option value="">All periods</option>
+            {periods.map(function(p){return <option key={p} value={p}>{p}</option>;})}
+          </select>
+          {activeFilters>0&&(
+            <button className="btn btn-sm" onClick={function(){setFilterTrigger("");setFilterRes("");setFilterPeriod("");}}>
+              Clear {activeFilters} filter{activeFilters>1?"s":""}
+            </button>
+          )}
         </div>
 
+        {/* Results */}
         {filtered.length===0
           ?<div className="card"><div className="empty">
             <div style={{fontSize:22,marginBottom:8}}>⊞</div>
-            <div style={{fontSize:13,fontWeight:500}}>{ps.length===0?"No precedents yet":"No results match your filters"}</div>
-            {ps.length===0&&<button className="btn btn-sm" style={{marginTop:12}} onClick={function(){setShowModal(true);}}>+ Add a historical precedent</button>}
+            <div style={{fontSize:13,fontWeight:500}}>{ps.length===0?"No precedents yet. Finalize a case or add a historical ruling.":"No results match your filters."}</div>
+            {ps.length===0&&<button className="btn btn-sm" style={{marginTop:12}} onClick={function(){setShowModal(true);}}>+ Add historical ruling</button>}
           </div></div>
           :filtered.map(function(c){
-            const res=c.cgoMemo&&c.cgoMemo.resolution?RESOLUTION_OPTIONS.find(function(r){return r.id===c.cgoMemo.resolution;}):null;
-            const determination=(c.decisionDraft||"").split("\n").find(function(l){return l.startsWith("DETERMINATION:");})
-              ||(c.decisionDraft||"").split("\n").find(function(l){return l.trim().length>20;})
-              ||"Decision recorded.";
+            const resId=c.disposition||(c.cgoMemo&&c.cgoMemo.resolution)||"";
+            const resOpt=RESOLUTION_OPTIONS.find(function(r){return r.id===resId;});
+            const isExpanded=expanded===c.ref;
+            const det=extractDRSection(c.decisionDraft||"","DETERMINATION")||"";
+            const deliberation=extractDRSection(c.decisionDraft||"","COMMITTEE DELIBERATION")||"";
+            // One-line ruling: first meaningful bullet or sentence from determination
+            const rulingLine=det.split("\n").find(function(l){return l.trim().length>10&&!l.startsWith("The Committee voted");})||det.split("\n").find(function(l){return l.trim().length>5;})||"See decision record";
+
             return(
-              <div key={c.ref} className="card" style={{borderLeft:"3px solid "+(c.source==="historical"?"#9b59b6":STATUS_COLOR[c.status]||"#1072ba")}}>
+              <div key={c.ref} className="card" style={{marginBottom:10,borderLeft:"3px solid "+(c.source==="historical"?"#9b59b6":STATUS_COLOR[c.status]||"#8bad44")}}>
                 <div style={{padding:"14px 16px"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                    <div>
-                      <div style={{fontFamily:"monospace",fontSize:10,color:"#8a969c",marginBottom:2}}>{c.ref}</div>
-                      <div style={{fontSize:13,fontWeight:500}}>{c.participant?c.participant+" -- ":""}{c.trigger}</div>
+                  {/* Header row */}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:4}}>
+                        <span style={{fontFamily:"monospace",fontSize:11,fontWeight:700,color:"#17477e"}}>{c.ref}</span>
+                        <Pill label={c.tier?"T"+c.tier:"CGO"} cls={TIER_CLS[c.tier]||"p-gray"}/>
+                        {c.source==="historical"&&<Pill label="Pre-portal" cls="p-purple"/>}
+                        <span style={{fontSize:11,color:"#8a969c"}}>{c.decided||c.opened} &nbsp;·&nbsp; {c.planPeriod}</span>
+                      </div>
+                      <div style={{fontSize:13,fontWeight:600,color:"#1a2530",marginBottom:2}}>{c.trigger||"—"}</div>
+                      <div style={{fontSize:12,color:"#5a646a"}}>{c.participant}{c.role?" · "+c.role:""}</div>
                     </div>
-                    <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
-                      {res&&<Pill label={res.label.split(" ")[0]} cls="p-blue"/>}
-                      {c.source==="historical"?<Pill label="Pre-portal" cls="p-purple"/>:<Pill label="Active" cls="p-green"/>}
+                    <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,marginLeft:12}}>
+                      {resOpt&&<Pill label={resOpt.label.split(" ").slice(0,2).join(" ")} cls="p-blue"/>}
                       <button className={"copy-cite"+(copiedRef===c.ref?" copied":"")} onClick={function(){copyRef(c);}}>
                         {copiedRef===c.ref?"Copied!":"Copy Reference"}
                       </button>
                     </div>
                   </div>
-                  <div style={{fontSize:12,color:"#5a646a",background:"#f8fafc",padding:"10px 12px",borderRadius:6,lineHeight:1.7}}>
-                    {determination}
+
+                  {/* Key numbers */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:10}}>
+                    {[
+                      ["Deal Value","$"+(c.dealValue||"—")],
+                      ["Comp Claimed","$"+(c.compClaimed||"—")],
+                      ["Approved","$"+(c.committeeApprovedAmount||c.cgoMemo&&c.cgoMemo.payoutImpact||"—")],
+                    ].map(function(item){return(
+                      <div key={item[0]} style={{background:"#f4f7fa",borderRadius:6,padding:"8px 10px"}}>
+                        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em",color:"#aab4bc",marginBottom:2}}>{item[0]}</div>
+                        <div style={{fontSize:13,fontWeight:700,color:"#17477e"}}>{item[1]}</div>
+                      </div>
+                    );})}
                   </div>
-                  <div style={{fontSize:10,color:"#8a969c",marginTop:6,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
-                    <span>{c.source==="historical"?"Pre-portal decision":"Decided"} {c.decided||c.opened}{c.planPeriod?" -- "+c.planPeriod:""}</span>
-                    {(function(){
-                      const rid=c.disposition||(c.cgoMemo&&c.cgoMemo.resolution)||"";
-                      const ropt=RESOLUTION_OPTIONS.find(function(r){return r.id===rid;});
-                      return ropt?<span style={{fontWeight:600,color:"#17477e",fontSize:11}}>{ropt.label}</span>:null;
-                    })()}
+
+                  {/* One-line ruling */}
+                  <div style={{fontSize:12,color:"#5a646a",background:"#f8fafc",padding:"8px 12px",borderRadius:6,lineHeight:1.6,marginBottom:8,borderLeft:"2px solid #dce6f0"}}>
+                    <span style={{fontWeight:600,color:"#17477e",fontSize:10,textTransform:"uppercase",letterSpacing:"0.05em",marginRight:8}}>Ruling</span>
+                    {rulingLine.replace(/^•\s*/,"")}
                   </div>
+
+                  {/* Expand/collapse */}
+                  <button className="btn btn-sm" style={{fontSize:11,padding:"3px 10px"}} onClick={function(){setExpanded(isExpanded?null:c.ref);}}>
+                    {isExpanded?"▲ Hide details":"▼ Show deliberation + policy basis"}
+                  </button>
+
+                  {isExpanded&&(
+                    <div style={{marginTop:12,borderTop:"1px solid #edf2f8",paddingTop:12}}>
+                      {deliberation&&(
+                        <div style={{marginBottom:12}}>
+                          <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em",color:"#1072ba",marginBottom:6}}>Committee Deliberation</div>
+                          <div style={{fontSize:12,color:"#5a646a",lineHeight:1.7,whiteSpace:"pre-wrap"}}>{deliberation}</div>
+                        </div>
+                      )}
+                      {det&&(
+                        <div style={{marginBottom:12}}>
+                          <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em",color:"#1072ba",marginBottom:6}}>Full Determination</div>
+                          <div style={{fontSize:12,color:"#5a646a",lineHeight:1.7,whiteSpace:"pre-wrap"}}>{det}</div>
+                        </div>
+                      )}
+                      {c.archivedDecisionUrl&&(
+                        <a href={c.archivedDecisionUrl} target="_blank" rel="noreferrer" style={{fontSize:12,color:"#1072ba",fontWeight:600}}>
+                          📄 View full Decision Record in SharePoint →
+                        </a>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             );

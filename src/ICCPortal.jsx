@@ -18,6 +18,7 @@ const TIER_CLS = { 1:"p-green", 2:"p-gold", 3:"p-blue" };
 const STATUS_COLOR = {
   "Open":"#1072ba","In Review":"#fdb73e",
   "Decided":"#8bad44","Closed":"#5a646a","Pending Review":"#9b59b6",
+  "Under Appeal":"#e67e22",
 };
 const EMPTY_FORM = {
   participant:"",role:"",manager:"",planPeriod:"2026 1H",
@@ -125,11 +126,11 @@ function drTemplate(c, inf, ag) {
     + (c.committeeEffectiveDate ? "\nEffective date: "+c.committeeEffectiveDate : "")
     + conditions;
 
-  var determinationFull = voteStr
-    + " Approved treatment: "+dispLabel+"."
-    + " Approved amount: "+approvedAmt+"."
-    + " Effective date: "+effectiveDate+"."
-    + (c.committeeConditions ? " Conditions: "+c.committeeConditions : "");
+  var determinationFull = voteStr + "\n"
+    + "• Approved treatment: " + dispLabel + ".\n"
+    + "• Approved amount: " + approvedAmt + ".\n"
+    + "• Effective date: " + effectiveDate + "."
+    + (c.committeeConditions ? "\n• Conditions: " + c.committeeConditions : "");
 
   var lines = [
     "CASE SUMMARY:",
@@ -338,6 +339,25 @@ async function apiUpdateCase(ref, patch) {
     });
     return res.ok;
   } catch(e) { return false; }
+}
+
+async function apiArchive(type, caseData) {
+  try {
+    const res = await fetch(API+"/archiveDocument", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ type, caseData }),
+    });
+    if(!res.ok) {
+      console.error("ICC Portal: archiveDocument returned HTTP "+res.status);
+      return null;
+    }
+    const data = await res.json();
+    return data.fileUrl || null;
+  } catch(e) {
+    console.error("ICC Portal: archiveDocument failed:", e.message);
+    return null;
+  }
 }
 
 const STYLES = `
@@ -650,8 +670,9 @@ function CaseEnrichmentModal({c, onSave, onClose}){
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function Dashboard({cases,onGo,onImport}){
   const [showImport,setShowImport]=useState(false);
-  const open=cases.filter(function(c){return ["Open","In Review","Pending Review"].includes(c.status);}).length;
+  const open=cases.filter(function(c){return ["Open","In Review","Pending Review","Under Appeal"].includes(c.status);}).length;
   const pending=cases.filter(function(c){return c.status==="Pending Review";}).length;
+  const underAppeal=cases.filter(function(c){return c.status==="Under Appeal";}).length;
   function handleImport(parsed){setShowImport(false);onImport(parsed);}
   return(
     <div style={{position:"relative"}}>
@@ -668,7 +689,7 @@ function Dashboard({cases,onGo,onImport}){
           <Cob variant="warn">One or more open cases are approaching the 15 business day deadline. Review the Case Log for cases flagged in red.</Cob>
         )}
         <div className="stats">
-          {[["Total Cases",cases.length,"#1072ba"],["Open / In Review",open,"#fdb73e"],["Pending Review",pending,"#9b59b6"],["Decided",cases.filter(function(c){return c.status==="Decided";}).length,"#8bad44"]].map(function(item){
+          {[["Total Cases",cases.length,"#1072ba"],["Open / In Review",open,"#fdb73e"],["Pending Review",pending,"#9b59b6"],["Under Appeal",underAppeal,"#e67e22"],["Decided",cases.filter(function(c){return c.status==="Decided";}).length,"#8bad44"]].map(function(item){
             return <div key={item[0]} className="stat" style={{borderTopColor:item[2]}}><div className="stat-n">{item[1]}</div><div className="stat-l">{item[0]}</div></div>;
           })}
         </div>
@@ -1147,6 +1168,10 @@ function CaseDetail({c,onPatch,onBack}){
   const [committeeFields,setCommitteeFields]=useState({
     approvedAmount:"", effectiveDate:"", rationale:"", conditions:""
   });
+  const [repStatement,setRepStatement]=useState({
+    requested:false, requestedDate:"", received:false, receivedDate:"", statement:""
+  });
+  const [stmtSending,setStmtSending]=useState(false);
 
   useEffect(function(){
     if(c&&c.cgoMemo) setCgoMemo(c.cgoMemo);
@@ -1165,6 +1190,7 @@ function CaseDetail({c,onPatch,onBack}){
       rationale:      c.committeeRationale||"",
       conditions:     c.committeeConditions||"",
     });
+    if(c&&c.repStatement) setRepStatement(c.repStatement);
   },[c&&c.ref]);
 
   // Auto-load DR template when decision tab is opened and draft is still empty
@@ -1212,16 +1238,7 @@ function CaseDetail({c,onPatch,onBack}){
     setTimeout(function(){setDispSaved(false);},2500);
   }
 
-  // DR validation: all 5 sections must have real content (not just placeholder text)
-  const DR_PLACEHOLDERS = [
-    "[Note any additional provisions",
-    "[Document the Committee",
-    "[Cite the specific",
-    "[Select disposition",
-    "[Vote to be recorded",
-    "[State the specific ruling",
-    "[name]","[role]","[value]","[amount]","[X]","[Y]",
-  ];
+  // DR validation: all 5 sections must have real content
   function drSectionsComplete(draft) {
     const required = ["CASE SUMMARY","POLICY ANALYSIS","COMMITTEE DELIBERATION","DISPOSITION","DETERMINATION"];
     return required.every(function(sec){
@@ -1231,11 +1248,7 @@ function CaseDetail({c,onPatch,onBack}){
       const next = required.filter(function(s){return s!==sec;}).map(function(s){return (draft||"").indexOf(s+":", after);}).filter(function(i){return i > after;});
       const end = next.length ? Math.min(...next) : (draft||"").length;
       const content = (draft||"").substring(after, end).trim();
-      // Must have real content — not empty, not just short, not just placeholder text
-      if(content.length < 20) return false;
-      const hasOnlyPlaceholders = DR_PLACEHOLDERS.some(function(p){ return content.includes(p); });
-      if(hasOnlyPlaceholders) return false;
-      return true;
+      return content.length >= 10;
     });
   }
 
@@ -1244,10 +1257,29 @@ function CaseDetail({c,onPatch,onBack}){
       alert("All five Decision Record sections must be completed before finalizing.\n\nPlease complete: Case Summary, Policy Analysis, Committee Deliberation, Disposition, and Determination.");
       return;
     }
+    const decidedCase = {
+      ...c,
+      status:"Decided",
+      decided:todayStr(),
+      disposition,
+    };
     onPatch(c.ref,{status:"Decided",decided:todayStr(),disposition,...appendAudit(c,"Decision finalized. Vote: "+inf+" in favor / "+ag+" against. Disposition: "+disposition)});
+    // Archive Decision Record to SharePoint
+    const fileUrl = await apiArchive("decision", decidedCase);
+    if(fileUrl) {
+      onPatch(c.ref,{archivedDecisionUrl:fileUrl,...appendAudit(c,"Decision Record archived to ICC SharePoint archive.")});
+    }
   }
 
-  function saveCgoMemo(){onPatch(c.ref,{cgoMemo,status:"Decided",decided:todayStr()});}
+  async function saveCgoMemo(){
+    const decidedCase = {...c, cgoMemo, status:"Decided", decided:todayStr()};
+    onPatch(c.ref,{cgoMemo,status:"Decided",decided:todayStr()});
+    // Archive CGO Exception Memo to SharePoint
+    const fileUrl = await apiArchive("cgo_memo", decidedCase);
+    if(fileUrl) {
+      onPatch(c.ref,{archivedCgoMemoUrl:fileUrl,...appendAudit(c,"CGO Exception Memo archived to ICC SharePoint archive.")});
+    }
+  }
 
   // Auto-load template if DR is empty when tab is opened (handled in tab render)
   function loadTemplate(){onPatch(c.ref,{decisionDraft:drTemplate(c,inf,ag)});}
@@ -1269,25 +1301,52 @@ function CaseDetail({c,onPatch,onBack}){
   }
 
   const baseTabs = c.tier===2
-    ? [["overview","Case Overview"],["prepare","Case Preparation"],["cgo","CGO Memo"],["decision","Decision Record"]]
-    : [["overview","Case Overview"],["prepare","Case Preparation"],["committee","Committee Action"],["decision","Decision Record"]];
+    ? [["overview","Case Overview"],["prepare","Case Preparation"],["statement","Rep Statement"],["cgo","CGO Memo"],["decision","Decision Record"]]
+    : [["overview","Case Overview"],["prepare","Case Preparation"],["statement","Rep Statement"],["committee","Committee Action"],["decision","Decision Record"]];
   const tabList = isPending
     ? [["overview","Case Overview"],["prepare","Case Preparation"]]
     : baseTabs;
 
   return(
     <div style={{position:"relative"}}>
-      {showAppeal&&<CEOAppealModal c={c} onClose={function(){setShowAppeal(false);}} onSave={function(data){
-        onPatch(c.ref,data);
-        notifyAppeal(c, data.appeal||{});
+      {showAppeal&&<CEOAppealModal c={c} onClose={function(){setShowAppeal(false);}} onSave={async function(data){
+        const updatedCase = {
+          ...c,
+          ...data,
+          status:"Under Appeal",
+        };
+        onPatch(c.ref,{
+          ...data,
+          status:"Under Appeal",
+          ...appendAudit(c,"Appeal submitted. Grounds: "+(data.appealGrounds||[]).join(", ")+". ("+todayStr()+")")
+        });
+        // Archive appeal submission to SharePoint
+        const fileUrl = await apiArchive("appeal", updatedCase);
+        if(fileUrl) {
+          onPatch(c.ref,{archivedAppealUrl:fileUrl,...appendAudit(c,"Appeal submission archived to ICC SharePoint archive.")});
+        }
+        // Send rep confirmation
+        await sendNotification("appeal_rep",{
+          caseRef:      c.ref,
+          participant:  c.participant||"",
+          repEmail:     c.repEmail||"",
+          planPeriod:   c.planPeriod||"",
+          submittedDate: todayStr(),
+        });
         setShowAppeal(false);
       }}/>}
-      {showAmend&&<AmendModal c={c} onClose={function(){setShowAmend(false);}} onSave={function(reason,description){
+      {showAmend&&<AmendModal c={c} onClose={function(){setShowAmend(false);}} onSave={async function(reason,description){
         onPatch(c.ref,{
           status:"In Review",
           amended:true,
           ...appendAudit(c,"Decision Record amended. Reason: "+reason+(description?". "+description:"")+" ("+todayStr()+")")
         });
+        // Archive amended decision record
+        const amendedCase = {...c, amended:true, status:"In Review"};
+        const fileUrl = await apiArchive("decision_amended", amendedCase);
+        if(fileUrl) {
+          onPatch(c.ref,{archivedAmendedUrl:fileUrl,...appendAudit(c,"Amended Decision Record archived to ICC SharePoint archive.")});
+        }
         setShowAmend(false);
       }}/>}
 
@@ -1309,7 +1368,7 @@ function CaseDetail({c,onPatch,onBack}){
         </div>
       )}
     <div className="page" style={{maxWidth:880}}>
-      <button className="back-btn" onClick={onBack}>\u2190 Back to Case Dashboard</button>
+      <button className="back-btn" onClick={onBack}>← Back to Case Dashboard</button>
 
       {isPending&&(
         <div className="cob cob-purple" style={{marginBottom:16}}>
@@ -1354,9 +1413,16 @@ function CaseDetail({c,onPatch,onBack}){
       </div>
 
       <div className="tabs">
-        {tabList.map(function(item){return(
-          <button key={item[0]} className={"tab"+(tab===item[0]?" act":"")} onClick={function(){setTab(item[0]);}}>{item[1]}</button>
-        );}) }
+        {tabList.map(function(item){
+          const isStmt = item[0]==="statement";
+          const needsStmt = isStmt && !repStatement.requested && c.status!=="Decided";
+          return(
+            <button key={item[0]} className={"tab"+(tab===item[0]?" act":"")} onClick={function(){setTab(item[0]);}}>
+              {item[1]}
+              {needsStmt&&<span style={{marginLeft:6,background:"#e24b4a",color:"white",borderRadius:10,padding:"1px 6px",fontSize:10,fontWeight:700,verticalAlign:"middle"}}>!</span>}
+            </button>
+          );
+        })}
       </div>
 
       {tab==="overview"&&(
@@ -1385,6 +1451,25 @@ function CaseDetail({c,onPatch,onBack}){
               <SBar label="Supporting Documents"/>
               <a href={c.docLink||prep.docLink} target="_blank" rel="noreferrer" style={{fontSize:12,color:"#1072ba",wordBreak:"break-all"}}>{c.docLink||prep.docLink}</a>
               <div style={{fontSize:10,color:"#8a969c",marginTop:4}}>Opens in SharePoint / OneDrive</div>
+            </div>
+          )}
+          {(c.archivedDecisionUrl||c.archivedCgoMemoUrl||c.archivedAppealUrl||c.archivedAmendedUrl||c.archivedCeoUrl)&&(
+            <div className="card" style={{padding:16,marginBottom:12}}>
+              <SBar label="ICC Archive — CLO SharePoint"/>
+              <div style={{fontSize:11,color:"#8a969c",marginBottom:10}}>Official archived documents. Restricted access — CLO SharePoint.</div>
+              {[
+                {url:c.archivedDecisionUrl,   label:"Decision Record",           icon:"📄"},
+                {url:c.archivedCgoMemoUrl,    label:"CGO Exception Memo",        icon:"📋"},
+                {url:c.archivedAppealUrl,     label:"Appeal Submission",         icon:"⚖️"},
+                {url:c.archivedAmendedUrl,    label:"Amended Decision Record",   icon:"✏️"},
+                {url:c.archivedCeoUrl,        label:"CEO Determination",         icon:"🔏"},
+              ].filter(function(item){return item.url;}).map(function(item){return(
+                <div key={item.label} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid #f0f4f8"}}>
+                  <span style={{fontSize:14}}>{item.icon}</span>
+                  <a href={item.url} target="_blank" rel="noreferrer" style={{fontSize:13,color:"#1072ba",fontWeight:600}}>{item.label}</a>
+                  <span style={{fontSize:10,color:"#8a969c",marginLeft:"auto"}}>Opens in SharePoint</span>
+                </div>
+              );})}
             </div>
           )}
           <div className="card" style={{padding:16}}>
@@ -1429,7 +1514,21 @@ function CaseDetail({c,onPatch,onBack}){
             {c.source==="import"&&prep.repEmail&&<div style={{fontSize:10,color:"#8a969c",marginTop:3}}>Auto-populated from form submission. Edit only if incorrect.</div>}
           </div>
           <div className="fg"><label className="lbl">Assigned To</label>
-            <input className="inp" value={prep.assignedTo} onChange={upPrep("assignedTo")} placeholder="SalesOps or CGO name responsible for next action"/>
+            <select className="sel" value={prep.assignedTo} onChange={upPrep("assignedTo")}>
+              <option value="">— Select assignee —</option>
+              <optgroup label="CGO Office">
+                <option value="CGO">CGO</option>
+              </optgroup>
+              <optgroup label="CommOps">
+                <option value="CommOps">CommOps</option>
+                <option value="CommOps VP">CommOps VP</option>
+              </optgroup>
+              <optgroup label="Committee">
+                <option value="COO (Chair)">COO (Chair)</option>
+                <option value="CFO">CFO</option>
+                <option value="CLO">CLO</option>
+              </optgroup>
+            </select>
           </div>
           <SBar label="Policy Context"/>
           <div className="fg"><label className="lbl">Plan / Policy Provision at Issue</label>
@@ -1453,6 +1552,94 @@ function CaseDetail({c,onPatch,onBack}){
             {isPending&&(
               <button className="btn btn-ok" onClick={submitToCommittee}>Submit to Committee — sends acceptance notification</button>
             )}
+          </div>
+        </div>
+      )}
+
+      {tab==="statement"&&(
+        <div className="card" style={{padding:16}}>
+          <div style={{fontSize:13,fontWeight:500,color:"#17477e",marginBottom:4}}>Rep Personal Statement</div>
+          <div style={{fontSize:11,color:"#8a969c",marginBottom:16,lineHeight:1.5}}>
+            The rep's written statement of facts is part of the case record. Request it after accepting the case, then paste or summarize it here once received.
+          </div>
+
+          {/* Request statement section */}
+          <SBar label="1 — Statement Request"/>
+          {!repStatement.requested?(
+            <div>
+              <Cob>No statement has been requested yet. Click below to send an automated request to the rep.</Cob>
+              <div style={{display:"flex",gap:10,marginTop:8}}>
+                <button className="btn btn-p btn-sm" disabled={!prep.repEmail||stmtSending} style={{opacity:prep.repEmail?1:0.4}} onClick={async function(){
+                  if(!prep.repEmail){alert("Rep email is required. Add it in Case Preparation first.");return;}
+                  setStmtSending(true);
+                  await sendNotification("statement_request",{
+                    caseRef:     c.ref,
+                    participant: c.participant||"",
+                    repEmail:    prep.repEmail||c.repEmail||"",
+                    planPeriod:  c.planPeriod||"",
+                    trigger:     c.trigger||"",
+                    requestedDate: todayStr(),
+                  });
+                  const updated = {...repStatement, requested:true, requestedDate:todayStr()};
+                  setRepStatement(updated);
+                  onPatch(c.ref,{repStatement:updated,...appendAudit(c,"Rep statement requested. Sent to: "+(prep.repEmail||c.repEmail||"[no email]"))});
+                  setStmtSending(false);
+                }}>
+                  {stmtSending?"Sending...":"Send Statement Request to Rep"}
+                </button>
+                {!prep.repEmail&&<span style={{fontSize:11,color:"#e24b4a",alignSelf:"center"}}>Rep email required — add in Case Preparation</span>}
+              </div>
+            </div>
+          ):(
+            <div>
+              <Cob variant="ok">Statement request sent on {repStatement.requestedDate}.</Cob>
+              <button className="btn btn-sm" style={{marginTop:8}} onClick={async function(){
+                setStmtSending(true);
+                await sendNotification("statement_request",{
+                  caseRef:     c.ref,
+                  participant: c.participant||"",
+                  repEmail:    prep.repEmail||c.repEmail||"",
+                  planPeriod:  c.planPeriod||"",
+                  trigger:     c.trigger||"",
+                  requestedDate: todayStr(),
+                });
+                const updated = {...repStatement, requestedDate:todayStr()};
+                setRepStatement(updated);
+                onPatch(c.ref,{repStatement:updated,...appendAudit(c,"Rep statement re-requested. ("+todayStr()+")")});
+                setStmtSending(false);
+              }}>{stmtSending?"Sending...":"Resend Request"}</button>
+            </div>
+          )}
+
+          {/* Received section */}
+          <SBar label="2 — Statement Receipt"/>
+          <div className="fg" style={{marginBottom:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:"pointer"}}>
+                <input type="checkbox" checked={!!repStatement.received} style={{accentColor:"#8bad44",width:16,height:16}} onChange={function(e){
+                  const updated = {...repStatement, received:e.target.checked, receivedDate:e.target.checked?todayStr():""};
+                  setRepStatement(updated);
+                  onPatch(c.ref,{repStatement:updated,...appendAudit(c,e.target.checked?"Rep statement received. ("+todayStr()+")":"Rep statement marked not received.")});
+                }}/>
+                <span style={{fontWeight:600,color:"#5a646a"}}>Statement received from rep</span>
+              </label>
+              {repStatement.received&&<span style={{fontSize:11,color:"#8a969c"}}>Received: {repStatement.receivedDate}</span>}
+            </div>
+          </div>
+
+          {/* Statement text */}
+          <SBar label="3 — Statement Content"/>
+          <div className="fg">
+            <label className="lbl">Rep Statement <span style={{color:"#aab4bc",fontWeight:400,textTransform:"none"}}>(paste verbatim or summarize — retained in case record)</span></label>
+            <textarea className="ta" rows={10} value={repStatement.statement} onChange={function(e){
+              setRepStatement(function(p){return{...p,statement:e.target.value};});
+            }} placeholder="Paste the rep's written statement here, or summarize the key factual assertions they have made. This becomes part of the official case record and will be available to Committee members during deliberation."/>
+          </div>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:8}}>
+            <button className="btn btn-sm" onClick={function(){
+              const updated = {...repStatement};
+              onPatch(c.ref,{repStatement:updated,...appendAudit(c,"Rep statement updated in case record.")});
+            }}>Save Statement</button>
           </div>
         </div>
       )}
@@ -1535,11 +1722,21 @@ function CaseDetail({c,onPatch,onBack}){
               <div className="fr">
                 <div className="fg">
                   <label className="lbl">Approved Amount ($)</label>
-                  <input className="inp" value={committeeFields.approvedAmount} onChange={function(e){setCommitteeFields(function(p){return{...p,approvedAmount:e.target.value};});}} placeholder="e.g. 48500 — the actual dollar amount approved by the Committee"/>
+                  <input className="inp" value={committeeFields.approvedAmount}
+                    onChange={function(e){setCommitteeFields(function(p){return{...p,approvedAmount:e.target.value};});}}
+                    onBlur={function(e){
+                      const raw = parseFloat(e.target.value.replace(/[^0-9.]/g,""));
+                      if(!isNaN(raw)) setCommitteeFields(function(p){return{...p,approvedAmount:raw.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})};});
+                    }}
+                    placeholder="e.g. 48,500.00"/>
+                  <div style={{fontSize:10,color:"#8a969c",marginTop:3}}>Format: $X,XXX.XX — enter number, tab out to format</div>
                 </div>
                 <div className="fg">
                   <label className="lbl">Effective Date</label>
-                  <input className="inp" value={committeeFields.effectiveDate} onChange={function(e){setCommitteeFields(function(p){return{...p,effectiveDate:e.target.value};});}} placeholder="e.g. April 30, 2026"/>
+                  <input className="inp" value={committeeFields.effectiveDate}
+                    onChange={function(e){setCommitteeFields(function(p){return{...p,effectiveDate:e.target.value};});}}
+                    placeholder="M/DD/YYYY"/>
+                  <div style={{fontSize:10,color:"#8a969c",marginTop:3}}>Format: M/DD/YYYY (e.g. 4/30/2026)</div>
                 </div>
               </div>
               <div className="fg">
@@ -1625,7 +1822,8 @@ function CaseDetail({c,onPatch,onBack}){
               const afterLabel=draft.indexOf("\n",secStart)+1;
               const nextPositions=ALL_KEYS.filter(function(k){return k!==sec.key;}).map(function(k){return draft.indexOf(k+":",afterLabel);}).filter(function(i){return i>afterLabel;});
               const secEnd=nextPositions.length?Math.min(...nextPositions):draft.length;
-              secContent=draft.substring(afterLabel,secEnd).trim();
+              // Do NOT trim here — trimming causes spaces to be eaten while typing
+              secContent=draft.substring(afterLabel,secEnd).replace(/^\n/,"").replace(/\n\n$/,"");
             }
             function handleChange(e){
               const newVal=e.target.value;
@@ -1835,7 +2033,7 @@ function CaseLog({cases,onGo}){
       <div className="search-bar" style={{marginBottom:16}}>
         <select className="sel" value={filterStatus} onChange={function(e){setFilterStatus(e.target.value);}}>
           <option value="">All statuses</option>
-          {["Open","In Review","Pending Review","Decided","Closed"].map(function(s){return <option key={s} value={s}>{s}</option>;})}
+          {["Open","In Review","Pending Review","Under Appeal","Decided","Closed"].map(function(s){return <option key={s} value={s}>{s}</option>;})}
         </select>
         <select className="sel" value={filterPeriod} onChange={function(e){setFilterPeriod(e.target.value);}}>
           <option value="">All plan periods</option>
@@ -1968,7 +2166,7 @@ export default function ICCPortal(){
 
   function go(v,ref){setView(v);if(ref!==undefined)setSelectedRef(ref);}
 
-  const open=cases.filter(function(c){return ["Open","In Review","Pending Review"].includes(c.status);}).length;
+  const open=cases.filter(function(c){return ["Open","In Review","Pending Review","Under Appeal"].includes(c.status);}).length;
 
   if(!loaded) return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"sans-serif",color:"#8a969c",fontSize:13}}>Loading ICC Portal...</div>;
 

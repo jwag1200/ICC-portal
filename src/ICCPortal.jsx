@@ -111,6 +111,26 @@ function drTemplate(c, inf, ag) {
   var dispOpt = RESOLUTION_OPTIONS.find(function(r){return r.id===(c.disposition||"");});
   var dispLabel = dispOpt ? dispOpt.label : "[Select disposition in Committee Action tab before loading template]";
   var voteStr = (inf+ag)>0 ? "The Committee voted "+inf+" in favor and "+ag+" against." : "[Vote to be recorded in Committee Action tab]";
+
+  // Pull structured committee fields if captured
+  var approvedAmt = c.committeeApprovedAmount ? "$"+c.committeeApprovedAmount : "[amount approved or denied]";
+  var effectiveDate = c.committeeEffectiveDate || "[effective date]";
+  var conditions = c.committeeConditions ? "\n\nConditions / Milestones: "+c.committeeConditions : "";
+  var rationaleText = c.committeeRationale
+    ? c.committeeRationale
+    : "[Document the Committee's interpretation of the applicable provisions, the key considerations weighed, and the reasoning that led to the determination below. If the vote was not unanimous, note the basis for any dissent.]";
+
+  var dispositionFull = dispLabel
+    + (c.committeeApprovedAmount ? "\nApproved amount: $"+c.committeeApprovedAmount : "")
+    + (c.committeeEffectiveDate ? "\nEffective date: "+c.committeeEffectiveDate : "")
+    + conditions;
+
+  var determinationFull = voteStr
+    + " Approved treatment: "+dispLabel+"."
+    + " Approved amount: "+approvedAmt+"."
+    + " Effective date: "+effectiveDate+"."
+    + (c.committeeConditions ? " Conditions: "+c.committeeConditions : "");
+
   var lines = [
     "CASE SUMMARY:",
     "Participant "+(c.participant||"[name]")+" ("+(c.role||"[role]")+") submitted a "+(c.trigger)+" matter for review under the "+(c.planPeriod)+" Incentive Compensation Plan.",
@@ -124,13 +144,13 @@ function drTemplate(c, inf, ag) {
     "[Note any additional provisions or considerations. Delete any provisions above that were not directly applicable to this matter.]",
     "",
     "COMMITTEE DELIBERATION:",
-    "[Document the Committee's interpretation of the applicable provisions, the key considerations weighed, and the reasoning that led to the determination below. If the vote was not unanimous, note the basis for any dissent.]",
+    rationaleText,
     "",
     "DISPOSITION:",
-    dispLabel,
+    dispositionFull,
     "",
     "DETERMINATION:",
-    voteStr+" [State the specific ruling: amount approved or denied, methodology applied, effective date, and any conditions or milestones attached to payment.]",
+    determinationFull,
   ];
   return lines.join("\n");
 }
@@ -790,6 +810,7 @@ function CEOAppealModal({c, onClose, onSave}) {
   const [summary, setSummary] = useState("");
   const [docs, setDocs] = useState("");
   const [relief, setRelief] = useState("");
+  const [sending, setSending] = useState(false);
 
   function toggleGround(id) {
     setGrounds(function(prev) {
@@ -797,8 +818,12 @@ function CEOAppealModal({c, onClose, onSave}) {
     });
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if(!grounds.length || !summary.trim()) return;
+    const groundLabels = grounds.map(function(g){
+      const found = APPEAL_GROUNDS.find(function(a){return a.id===g;});
+      return found ? found.label : g;
+    }).join("; ");
     const appealData = {
       appealStatus: "Submitted",
       appealDate: todayStr(),
@@ -808,49 +833,21 @@ function CEOAppealModal({c, onClose, onSave}) {
       appealRelief: relief,
     };
     onSave(appealData);
-    // Build mailto to CEO office
-    const groundLabels = grounds.map(function(g){
-      const found = APPEAL_GROUNDS.find(function(a){return a.id===g;});
-      return found ? found.label : g;
-    }).join("; ");
-    const bodyLines = [
-      "Dear CEO,",
-      "",
-      "I am submitting a formal Plan Interpretation Review request regarding ICC Case " + c.ref + ".",
-      "",
-      "CASE REFERENCE: " + c.ref,
-      "PARTICIPANT: " + (c.participant||"[name]"),
-      "PLAN PERIOD: " + (c.planPeriod||"[period]"),
-      "DECISION DATE: " + (c.decided||"[date]"),
-      "APPEAL SUBMISSION DATE: " + todayStr(),
-      "",
-      "GROUND(S) FOR APPEAL:",
-      groundLabels,
-      "",
-      "FACTUAL SUMMARY:",
-      summary,
-      "",
-      docs ? ("SUPPORTING DOCUMENTATION:\n" + docs) : "",
-      "",
-      "RELIEF REQUESTED:",
-      relief || "[describe requested outcome]",
-      "",
-      "This appeal is submitted within the 15 business day window per the ICC Charter.",
-      "",
-      "Sincerely,",
-      (c.participant||"[Name]"),
-    ];
-    const body = bodyLines.filter(function(l,i,arr){
-      return !(l===""&&arr[i-1]==="");
-    }).join("\n");
-    const subj = "Plan Interpretation Review Request -- Case " + c.ref;
-    const to = "icc@alianza.com";
-    const href = ["mailto:",encodeURIComponent(to),
-      "?subject=",encodeURIComponent(subj),
-      "&cc=",encodeURIComponent("icc@alianza.com"),
-      "&body=",encodeURIComponent(body)
-    ].join("");
-    window.location.href = href;
+    setSending(true);
+    try {
+      await sendNotification("appeal", {
+        caseRef:       c.ref,
+        participant:   c.participant||"",
+        repEmail:      c.repEmail||"",
+        planPeriod:    c.planPeriod||"",
+        grounds:       groundLabels,
+        summary:       summary,
+        submittedDate: todayStr(),
+      });
+    } catch(e) {
+      console.error("Appeal notification failed:", e.message);
+    }
+    setSending(false);
     onClose();
   }
 
@@ -860,7 +857,7 @@ function CEOAppealModal({c, onClose, onSave}) {
     <div className="modal-backdrop" onClick={function(e){if(e.target===e.currentTarget)onClose();}}>
       <div className="modal" style={{width:680}}>
         <div className="modal-title">Escalate to CEO Plan Interpretation Review</div>
-        <div className="modal-sub">Complete all required fields. This will open a pre-drafted appeal email to icc@alianza.com for the CEO office. The appeal must be submitted within 15 business days of the Decision Record.</div>
+        <div className="modal-sub">Complete all required fields. On submit, an automated notification is sent to the CGO office at icc@alianza.com to initiate the CEO review process. The appeal must be submitted within 15 business days of the Decision Record.</div>
 
         <div style={{background:"#fef3dc",border:"1px solid #fde5b8",borderRadius:8,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#8a5200"}}>
           <strong>Valid grounds only:</strong> Procedural defect, material new evidence, or manifest misapplication. Disagreement with the outcome is not a valid ground.
@@ -901,8 +898,10 @@ function CEOAppealModal({c, onClose, onSave}) {
         </div>
 
         <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:8}}>
-          <button className="btn btn-sm" onClick={onClose}>Cancel</button>
-          <button className="btn btn-p btn-sm" onClick={handleSubmit} disabled={!canSubmit} style={{opacity:canSubmit?1:0.5}}>Submit Appeal + Open Email</button>
+          <button className="btn btn-sm" onClick={onClose} disabled={sending}>Cancel</button>
+          <button className="btn btn-p btn-sm" onClick={handleSubmit} disabled={!canSubmit||sending} style={{opacity:canSubmit&&!sending?1:0.5}}>
+            {sending?"Sending...":"Submit Appeal"}
+          </button>
         </div>
       </div>
     </div>
@@ -1089,12 +1088,65 @@ function CGOExceptionMemo({onSave, onBack}) {
   );
 }
 
+// ── AMEND MODAL ───────────────────────────────────────────────────────────────
+function AmendModal({c, onClose, onSave}){
+  const AMEND_REASONS = [
+    "Clerical Correction — fixing a factual error, typo, or calculation mistake",
+    "CEO Remand — decision returned to Committee by CEO following appeal",
+    "De-booking Adjustment — underlying deal changed after decision was issued",
+    "Supplemental Information — material information received after finalization",
+    "Other — see description below",
+  ];
+  const [reason, setReason] = useState("");
+  const [description, setDescription] = useState("");
+  const canSave = reason && (reason !== AMEND_REASONS[4] || description.trim().length > 0);
+
+  return(
+    <div className="modal-backdrop" onClick={function(e){if(e.target===e.currentTarget)onClose();}}>
+      <div className="modal" style={{width:600}}>
+        <div className="modal-title">Amend Decision Record</div>
+        <div className="modal-sub">
+          This will unlock the Decision Record and return the case to In Review status.
+          The amendment reason will be permanently recorded in the case audit log.
+        </div>
+        <div style={{background:"#fef3dc",border:"1px solid #f0d080",borderRadius:8,padding:"12px 14px",marginBottom:16,fontSize:13,color:"#8a5200"}}>
+          ⚠ This action is audited. The amendment reason, date, and your action will be permanently visible in the case history.
+        </div>
+        <div className="fg">
+          <label className="lbl">Reason for Amendment *</label>
+          {AMEND_REASONS.map(function(r){return(
+            <div key={r} className={"res-opt"+(reason===r?" selected":"")} style={{marginBottom:6}} onClick={function(){setReason(r);}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:13,height:13,borderRadius:"50%",border:"2px solid "+(reason===r?"#1072ba":"#d0d8e0"),background:reason===r?"#1072ba":"white",flexShrink:0}}/>
+                <div style={{fontSize:13,color:reason===r?"#17477e":"#5a646a"}}>{r}</div>
+              </div>
+            </div>
+          );})}
+        </div>
+        <div className="fg">
+          <label className="lbl">Description <span style={{color:"#aab4bc",fontWeight:400,textTransform:"none"}}>{reason===AMEND_REASONS[4]?"(required)":"(optional — provide additional context)"}</span></label>
+          <textarea className="ta" rows={3} value={description} onChange={function(e){setDescription(e.target.value);}} placeholder="Describe specifically what is being corrected or changed..."/>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
+          <button className="btn btn-sm" onClick={onClose}>Cancel</button>
+          <button className="btn btn-sm" style={{background:"#5a2090",color:"white",borderColor:"#5a2090",opacity:canSave?1:0.4}} disabled={!canSave} onClick={function(){onSave(reason,description);}}>
+            Unlock and Amend
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── CASE DETAIL ───────────────────────────────────────────────────────────────
 function CaseDetail({c,onPatch,onBack}){
   const [tab,setTab]=useState("overview");
   const [cgoMemo,setCgoMemo]=useState({resolution:"",payoutImpact:"",effectiveDate:"",methodology:"",precedentRef:"",equityChecks:{}});
   const [prep,setPrep]=useState({repEmail:"",policyIssue:"",cgoOpinion:"",advisory:"",docLink:""});
   const [disposition,setDisposition]=useState("");
+  const [committeeFields,setCommitteeFields]=useState({
+    approvedAmount:"", effectiveDate:"", rationale:"", conditions:""
+  });
 
   useEffect(function(){
     if(c&&c.cgoMemo) setCgoMemo(c.cgoMemo);
@@ -1107,6 +1159,12 @@ function CaseDetail({c,onPatch,onBack}){
       assignedTo:c.assignedTo||"",
     });
     if(c&&c.disposition) setDisposition(c.disposition);
+    if(c) setCommitteeFields({
+      approvedAmount: c.committeeApprovedAmount||"",
+      effectiveDate:  c.committeeEffectiveDate||"",
+      rationale:      c.committeeRationale||"",
+      conditions:     c.committeeConditions||"",
+    });
   },[c&&c.ref]);
 
   // Auto-load DR template when decision tab is opened and draft is still empty
@@ -1146,6 +1204,7 @@ function CaseDetail({c,onPatch,onBack}){
   function recordVote(member,vote){onPatch(c.ref,{votes:{...votes,[member]:vote}});}
   const [dispSaved,setDispSaved]=useState(false);
   const [showAppeal,setShowAppeal]=useState(false);
+  const [showAmend,setShowAmend]=useState(false);
 
   function saveDisposition(){
     onPatch(c.ref,{disposition});
@@ -1153,7 +1212,16 @@ function CaseDetail({c,onPatch,onBack}){
     setTimeout(function(){setDispSaved(false);},2500);
   }
 
-  // DR validation: all 5 sections must have content before finalizing
+  // DR validation: all 5 sections must have real content (not just placeholder text)
+  const DR_PLACEHOLDERS = [
+    "[Note any additional provisions",
+    "[Document the Committee",
+    "[Cite the specific",
+    "[Select disposition",
+    "[Vote to be recorded",
+    "[State the specific ruling",
+    "[name]","[role]","[value]","[amount]","[X]","[Y]",
+  ];
   function drSectionsComplete(draft) {
     const required = ["CASE SUMMARY","POLICY ANALYSIS","COMMITTEE DELIBERATION","DISPOSITION","DETERMINATION"];
     return required.every(function(sec){
@@ -1163,7 +1231,11 @@ function CaseDetail({c,onPatch,onBack}){
       const next = required.filter(function(s){return s!==sec;}).map(function(s){return (draft||"").indexOf(s+":", after);}).filter(function(i){return i > after;});
       const end = next.length ? Math.min(...next) : (draft||"").length;
       const content = (draft||"").substring(after, end).trim();
-      return content.length > 10; // must have at least some real content
+      // Must have real content — not empty, not just short, not just placeholder text
+      if(content.length < 20) return false;
+      const hasOnlyPlaceholders = DR_PLACEHOLDERS.some(function(p){ return content.includes(p); });
+      if(hasOnlyPlaceholders) return false;
+      return true;
     });
   }
 
@@ -1209,6 +1281,14 @@ function CaseDetail({c,onPatch,onBack}){
         onPatch(c.ref,data);
         notifyAppeal(c, data.appeal||{});
         setShowAppeal(false);
+      }}/>}
+      {showAmend&&<AmendModal c={c} onClose={function(){setShowAmend(false);}} onSave={function(reason,description){
+        onPatch(c.ref,{
+          status:"In Review",
+          amended:true,
+          ...appendAudit(c,"Decision Record amended. Reason: "+reason+(description?". "+description:"")+" ("+todayStr()+")")
+        });
+        setShowAmend(false);
       }}/>}
 
       {/* Notification status banner */}
@@ -1264,6 +1344,7 @@ function CaseDetail({c,onPatch,onBack}){
             <button className="btn btn-p btn-sm" onClick={finalize}>Finalize Decision</button>
           )}
           {c.status==="Decided"&&<button className="btn btn-sm" onClick={function(){downloadDecisionPDF(c);}}>Download Decision Record</button>}
+          {c.status==="Decided"&&<button className="btn btn-sm" style={{borderColor:"#e8d0f0",color:"#5a2090",background:"#f5eefa"}} onClick={function(){setShowAmend(true);}}>Amend Decision Record</button>}
           {c.status==="Decided"&&!c.appealStatus&&<button className="btn btn-sm" style={{borderColor:"#f0d080",color:"#8a5200",background:"#fef3dc"}} onClick={function(){setShowAppeal(true);}}>Escalate to CEO Review</button>}
           {c.appealStatus&&<span style={{fontSize:11,fontWeight:700,background:"#f5eefa",color:"#5a2090",border:"1px solid #d8b8f0",borderRadius:20,padding:"4px 12px"}}>Appeal: {c.appealStatus} {c.appealDate||""}</span>}
           {c.status==="Decided"&&(
@@ -1319,12 +1400,15 @@ function CaseDetail({c,onPatch,onBack}){
           {c.auditLog&&c.auditLog.length>0&&(
             <div className="card" style={{padding:16}}>
               <SBar label="Case Activity Log"/>
-              {c.auditLog.map(function(entry,i){return(
-                <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"6px 0",borderBottom:i<c.auditLog.length-1?"1px solid #f0f4f8":"none"}}>
-                  <span style={{fontSize:10,color:"#8a969c",whiteSpace:"nowrap",minWidth:90}}>{entry.split(" -- ")[0]}</span>
-                  <span style={{fontSize:12,color:"#5a646a"}}>{entry.split(" -- ").slice(1).join(" -- ")}</span>
-                </div>
-              );})}
+              {[...c.auditLog].reverse().map(function(entry,i){
+                const isAmend = entry.includes("amended");
+                return(
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 0",borderBottom:i<c.auditLog.length-1?"1px solid #f0f4f8":"none",background:isAmend?"#faf5fe":"transparent",margin:isAmend?"0 -16px":0,padding:isAmend?"8px 16px":"8px 0"}}>
+                    <span style={{fontSize:10,color:isAmend?"#5a2090":"#8a969c",whiteSpace:"nowrap",minWidth:90,fontWeight:isAmend?700:400}}>{entry.split(" -- ")[0]}</span>
+                    <span style={{fontSize:12,color:isAmend?"#5a2090":"#5a646a",fontWeight:isAmend?600:400}}>{isAmend?"✏ ":""}{entry.split(" -- ").slice(1).join(" -- ")}</span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </>
@@ -1445,11 +1529,43 @@ function CaseDetail({c,onPatch,onBack}){
               <SBar label="Disposition"/>
               <Cob>Record the resolution the Committee has approved. This populates the Precedent Register and Case Log.</Cob>
               <ResolutionSelector value={disposition} onChange={function(v){setDisposition(v);}}/>
+
+              <SBar label="Ruling Details"/>
+              <Cob variant="gold">Complete these fields before going to the Decision Record tab — they auto-populate the Disposition, Determination, and Deliberation sections.</Cob>
+              <div className="fr">
+                <div className="fg">
+                  <label className="lbl">Approved Amount ($)</label>
+                  <input className="inp" value={committeeFields.approvedAmount} onChange={function(e){setCommitteeFields(function(p){return{...p,approvedAmount:e.target.value};});}} placeholder="e.g. 48500 — the actual dollar amount approved by the Committee"/>
+                </div>
+                <div className="fg">
+                  <label className="lbl">Effective Date</label>
+                  <input className="inp" value={committeeFields.effectiveDate} onChange={function(e){setCommitteeFields(function(p){return{...p,effectiveDate:e.target.value};});}} placeholder="e.g. April 30, 2026"/>
+                </div>
+              </div>
+              <div className="fg">
+                <label className="lbl">Committee Rationale</label>
+                <textarea className="ta" rows={4} value={committeeFields.rationale} onChange={function(e){setCommitteeFields(function(p){return{...p,rationale:e.target.value};});}} placeholder="Summarize the Committee's interpretation and key reasoning. This pre-populates the Committee Deliberation section of the Decision Record. Should be factual and policy-grounded — do not attribute positions to individual members."/>
+              </div>
+              <div className="fg">
+                <label className="lbl">Conditions / Milestones (if any)</label>
+                <textarea className="ta" rows={2} value={committeeFields.conditions} onChange={function(e){setCommitteeFields(function(p){return{...p,conditions:e.target.value};});}} placeholder="e.g. Payment contingent on Minco start date. If no conditions, leave blank."/>
+              </div>
+
               {disposition&&c.status!=="Decided"&&(
                 <div style={{display:"flex",gap:10,justifyContent:"flex-end",alignItems:"center",marginTop:8}}>
-                  {dispSaved&&<span style={{fontSize:11,color:"#3a5a00"}}>Disposition saved</span>}
-                  <button className={"btn btn-sm"+(dispSaved?" btn-ok":"")} onClick={saveDisposition}>
-                    {dispSaved?"Saved ✓":"Save Disposition"}
+                  {dispSaved&&<span style={{fontSize:11,color:"#3a5a00"}}>Saved ✓</span>}
+                  <button className={"btn btn-sm"+(dispSaved?" btn-ok":"")} onClick={function(){
+                    onPatch(c.ref,{
+                      disposition,
+                      committeeApprovedAmount: committeeFields.approvedAmount,
+                      committeeEffectiveDate:  committeeFields.effectiveDate,
+                      committeeRationale:      committeeFields.rationale,
+                      committeeConditions:     committeeFields.conditions,
+                    });
+                    setDispSaved(true);
+                    setTimeout(function(){setDispSaved(false);},2500);
+                  }}>
+                    {dispSaved?"Saved ✓":"Save Ruling Details"}
                   </button>
                 </div>
               )}
@@ -1487,6 +1603,12 @@ function CaseDetail({c,onPatch,onBack}){
               </div>
             </div>
           </div>
+
+          {c.status==="Decided"&&(
+            <div style={{background:"#edf5e0",border:"1px solid #b8d898",borderRadius:8,padding:"10px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:8,fontSize:13,color:"#3a5a00",fontWeight:600}}>
+              🔒 Decision Record is locked — this case has been decided and the record is read-only.
+            </div>
+          )}
 
           {[
             {key:"CASE SUMMARY",     label:"Case Summary",          rows:4, hint:"State the participant, role, trigger type, and plan period. Include deal value, compensation claimed by rep, and compensation calculated by CommOps."},
@@ -1529,7 +1651,7 @@ function CaseDetail({c,onPatch,onBack}){
                     <div style={{fontSize:10,fontWeight:900,textTransform:"uppercase",letterSpacing:"0.1em",color:"#1072ba"}}>{sec.label}</div>
                     {!c.decisionDraft&&<span style={{fontSize:11,color:"#aab4bc",fontStyle:"italic"}}>Load template to pre-populate</span>}
                   </div>
-                  <textarea className="dr-area" rows={sec.rows} style={{background:"white"}} placeholder={sec.hint} value={secContent} onChange={handleChange}/>
+                  <textarea className="dr-area" rows={sec.rows} style={{background: c.status==="Decided" ? "#f8fafc" : "white", color: c.status==="Decided" ? "#5a646a" : "#17477e"}} placeholder={sec.hint} value={secContent} onChange={c.status==="Decided" ? function(){} : handleChange} readOnly={c.status==="Decided"}/>
                 </div>
               </div>
             );
@@ -1572,7 +1694,7 @@ function fallbackCopy(text, ref) {
 }
 
 // ── PRECEDENTS ────────────────────────────────────────────────────────────────
-function Precedents({cases,onAddHistorical}){
+function Precedents({cases,onAddHistorical,onGo}){
   const [showModal,setShowModal]=useState(false);
   const [search,setSearch]=useState("");
   const [filterTrigger,setFilterTrigger]=useState("");
@@ -1625,6 +1747,7 @@ function Precedents({cases,onAddHistorical}){
     <div style={{position:"relative"}}>
       {showModal&&<HistoricalModal onSave={handleSave} onClose={function(){setShowModal(false);}}/>}
       <div className="page">
+        <button className="back-btn" onClick={function(){onGo("dashboard");}}>← Back to Case Dashboard</button>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
           <div>
             <div className="page-title">Precedent Register</div>
@@ -1706,6 +1829,7 @@ function CaseLog({cases,onGo}){
   const periods=[...new Set(cases.map(function(c){return c.planPeriod;}).filter(Boolean))];
   return(
     <div className="page">
+      <button className="back-btn" onClick={function(){onGo("dashboard");}}>← Back to Case Dashboard</button>
       <div className="page-title">Case Log</div>
       <div className="page-sub">Complete index. Filter by status, plan period, or resolution type. Click any row to open.</div>
       <div className="search-bar" style={{marginBottom:16}}>
@@ -1882,7 +2006,7 @@ export default function ICCPortal(){
           {view==="new"&&<NewCase onSave={addCase} onBack={function(){go("dashboard");}}/>}
           {view==="cgo-memo"&&<CGOExceptionMemo onSave={addCase} onBack={function(){go("dashboard");}}/>}
           {view==="detail"&&<CaseDetail c={cases.find(function(c){return c.ref===selectedRef;})||null} onPatch={patchCase} onBack={function(){go("dashboard");}}/>}
-          {view==="precedents"&&<Precedents cases={cases} onAddHistorical={addHistorical}/>}
+          {view==="precedents"&&<Precedents cases={cases} onAddHistorical={addHistorical} onGo={go}/>}
           {view==="log"&&<CaseLog cases={cases} onGo={go}/>}
         </div>
       </div>

@@ -1251,6 +1251,7 @@ function CaseDetail({c,onPatch,onBack}){
   const [dispSaved,setDispSaved]=useState(false);
   const [showAppeal,setShowAppeal]=useState(false);
   const [showAmend,setShowAmend]=useState(false);
+  const [drReloaded,setDrReloaded]=useState(false);
 
   function saveDisposition(){
     onPatch(c.ref,{disposition});
@@ -1803,11 +1804,16 @@ function CaseDetail({c,onPatch,onBack}){
                 <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",marginBottom:2}}>Case Reference</div>
                 <div style={{fontSize:16,fontWeight:700,color:"white",fontFamily:"monospace"}}>{c.ref}</div>
                 {c.source!=="historical"&&(
-                  <div style={{display:"flex",gap:6,marginTop:10}}>
-                    <button className="btn btn-sm" style={{background:"rgba(255,255,255,0.15)",color:"white",border:"1px solid rgba(255,255,255,0.3)",fontSize:11}} onClick={loadTemplate}>
-                      {c.decisionDraft?"Reload from Committee Fields":"Load Template"}
+                  <div style={{display:"flex",gap:6,marginTop:10,alignItems:"center"}}>
+                    <button className="btn btn-sm" style={{background:drReloaded?"rgba(139,173,68,0.3)":"rgba(255,255,255,0.15)",color:"white",border:"1px solid rgba(255,255,255,0.3)",fontSize:11}} onClick={function(){
+                      loadTemplate();
+                      setDrReloaded(true);
+                      setTimeout(function(){setDrReloaded(false);},3000);
+                    }}>
+                      {drReloaded?"✓ Reloaded":c.decisionDraft?"Reload from Committee Fields":"Load Template"}
                     </button>
-                    {c.amended&&<span style={{fontSize:10,color:"#fdb73e",alignSelf:"center"}}>⚠ Case was amended — reload to apply updated committee fields</span>}
+                    {c.amended&&!drReloaded&&<span style={{fontSize:10,color:"#fdb73e",alignSelf:"center"}}>⚠ Case was amended — reload to apply updated committee fields</span>}
+                    {drReloaded&&<span style={{fontSize:10,color:"#8bad44",alignSelf:"center"}}>Decision Record updated from latest committee fields</span>}
                   </div>
                 )}
               </div>

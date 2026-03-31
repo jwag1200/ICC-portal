@@ -203,8 +203,20 @@ function notifyRejected(c, reason) {
   });
 }
 
+function extractDRSection(draft, sectionKey) {
+  const ALL_KEYS = ["CASE SUMMARY","POLICY ANALYSIS","COMMITTEE DELIBERATION","DISPOSITION","DETERMINATION"];
+  const idx = (draft||"").indexOf(sectionKey+":");
+  if(idx === -1) return "";
+  const after = (draft||"").indexOf("\n", idx) + 1;
+  const nexts = ALL_KEYS.filter(function(k){return k!==sectionKey;})
+    .map(function(k){return (draft||"").indexOf(k+":", after);})
+    .filter(function(i){return i > after;});
+  const end = nexts.length ? Math.min(...nexts) : (draft||"").length;
+  return (draft||"").substring(after, end).trim();
+}
+
 function notifyDecision(c, inf, ag) {
-  const determination = (c.decisionDraft||"").split("\n").find(function(l){return l.startsWith("DETERMINATION:");}) || "";
+  const determination = extractDRSection(c.decisionDraft||"", "DETERMINATION");
   const dispOpt = RESOLUTION_OPTIONS.find(function(r){return r.id===(c.disposition||"");});
   return sendNotification("decision", {
     caseRef:        c.ref,
@@ -278,7 +290,15 @@ function downloadDecisionPDF(c) {
     });
     const content = draftLines.slice(startIdx+1, endIdx===-1?undefined:endIdx).join("\n").trim();
     if(sec === "DETERMINATION" || sec === "DISPOSITION") {
-      html.push("<div class='determination'><strong>"+sec+":</strong><br/>"+content.replace(/\n/g,"<br/>")+"</div>");
+      // Render bullet lines as list items
+      const rendered = content.split("\n").map(function(line){
+        if(line.trim().startsWith("•")) {
+          return "<li style='margin-bottom:4px;'>"+line.trim().substring(1).trim()+"</li>";
+        }
+        return line ? "<p style='margin:0 0 6px;'>"+line+"</p>" : "";
+      }).join("");
+      const hasListItems = content.includes("•");
+      html.push("<div class='determination'><strong>"+sec+":</strong><br/>"+(hasListItems?"<ul style='margin:8px 0 0 16px;padding:0;'>"+rendered+"</ul>":rendered)+"</div>");
     } else {
       html.push("<div class='section'><div class='section-title'>"+sec+"</div><div class='section-body'>"+content+"</div></div>");
     }
@@ -1782,7 +1802,14 @@ function CaseDetail({c,onPatch,onBack}){
               <div style={{textAlign:"right"}}>
                 <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",marginBottom:2}}>Case Reference</div>
                 <div style={{fontSize:16,fontWeight:700,color:"white",fontFamily:"monospace"}}>{c.ref}</div>
-                {c.source!=="historical"&&<button className="btn btn-sm" style={{marginTop:10,background:"rgba(255,255,255,0.15)",color:"white",border:"1px solid rgba(255,255,255,0.3)",fontSize:11}} onClick={loadTemplate}>{c.decisionDraft?"Reset Template":"Load Template"}</button>}
+                {c.source!=="historical"&&(
+                  <div style={{display:"flex",gap:6,marginTop:10}}>
+                    <button className="btn btn-sm" style={{background:"rgba(255,255,255,0.15)",color:"white",border:"1px solid rgba(255,255,255,0.3)",fontSize:11}} onClick={loadTemplate}>
+                      {c.decisionDraft?"Reload from Committee Fields":"Load Template"}
+                    </button>
+                    {c.amended&&<span style={{fontSize:10,color:"#fdb73e",alignSelf:"center"}}>⚠ Case was amended — reload to apply updated committee fields</span>}
+                  </div>
+                )}
               </div>
             </div>
           </div>

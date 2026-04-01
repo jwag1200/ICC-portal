@@ -1497,9 +1497,9 @@ function CaseDetail({c,onPatch,onBack}){
       execToken,
     };
     onPatch(c.ref,{status:"Decided",decided:todayStr(),disposition,execToken,...appendAudit(c,"Decision finalized. Vote: "+inf+" in favor / "+ag+" against. Disposition: "+disposition)});
-    // Archive Decision Record to SharePoint
+    // Archive Decision Record to SharePoint — only patch the URL back
     const fileUrl = await apiArchive("decision", decidedCase);
-    if(fileUrl) onPatch(c.ref,{archivedDecisionUrl:fileUrl,...appendAudit(c,"Decision Record archived to ICC SharePoint archive.")});
+    if(fileUrl) onPatch(c.ref,{archivedDecisionUrl:fileUrl});
     // Send CommOps execution email with Mark as Executed link
     await notifyCommOpsExecution(decidedCase, execToken);
   }
@@ -1546,7 +1546,7 @@ function CaseDetail({c,onPatch,onBack}){
       {showCEODet&&<CEODeterminationModal c={c} onClose={function(){setShowCEODet(false);}} onSave={async function(det){
         const updatedCase = {...c,...det};
         onPatch(c.ref,{...det,...appendAudit(c,"CEO determination recorded: "+det.ceoOutcome+". ("+det.ceoDecisionDate+")")});
-        // Archive CEO determination
+        // Archive CEO determination — only patch the URL back
         const fileUrl = await apiArchive("ceo_determination", updatedCase);
         if(fileUrl) onPatch(c.ref,{archivedCeoUrl:fileUrl});
         // Notify rep
@@ -1573,10 +1573,10 @@ function CaseDetail({c,onPatch,onBack}){
           status:"Under Appeal",
           ...appendAudit(c,"Appeal submitted. Grounds: "+(data.appealGrounds||[]).join(", ")+". ("+todayStr()+")")
         });
-        // Archive appeal submission to SharePoint
+        // Archive appeal submission to SharePoint — only patch the URL, not the full case
         const fileUrl = await apiArchive("appeal", updatedCase);
         if(fileUrl) {
-          onPatch(c.ref,{archivedAppealUrl:fileUrl,...appendAudit(c,"Appeal submission archived to ICC SharePoint archive.")});
+          onPatch(c.ref,{archivedAppealUrl:fileUrl});
         }
         // Send rep confirmation
         await sendNotification("appeal_rep",{
@@ -1594,12 +1594,10 @@ function CaseDetail({c,onPatch,onBack}){
           amended:true,
           ...appendAudit(c,"Decision Record amended. Reason: "+reason+(description?". "+description:"")+" ("+todayStr()+")")
         });
-        // Archive amended decision record
+        // Archive amended decision record — only patch the URL back
         const amendedCase = {...c, amended:true, status:"In Review"};
         const fileUrl = await apiArchive("decision_amended", amendedCase);
-        if(fileUrl) {
-          onPatch(c.ref,{archivedAmendedUrl:fileUrl,...appendAudit(c,"Amended Decision Record archived to ICC SharePoint archive.")});
-        }
+        if(fileUrl) onPatch(c.ref,{archivedAmendedUrl:fileUrl});
         setShowAmend(false);
       }}/>}
 

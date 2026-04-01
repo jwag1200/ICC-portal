@@ -5,6 +5,8 @@ const TRIGGERS = [
   "Windfall Attainment (250%+)",
   "Rep-Filed Dispute",
   "De-booking > $250,000",
+  "Booking Policy Exception — Pre-Close",
+  "Booking Policy Exception — Post-Close",
 ];
 const RESOLUTION_OPTIONS = [
   { id:"full", label:"Commission + Full Quota Retirement", desc:"Standard treatment. Commission paid, booking counts toward quota attainment." },
@@ -64,6 +66,18 @@ const PLAN_REFS = {
     { source:"Alianza Booking Definition Policy (Jan 1, 2026)", ref:"De-booking -- Finance authority", text:"De-booking is a Finance call. Finance can initiate a de-booking. Sales Ops to seek Finance approval including the reasoning on the deal note." },
     { source:"ICC Charter v1.1", ref:"Section 4 -- Jurisdiction, Tier 3 Triggers", text:"Any de-booking event exceeding $250,000 is a mandatory Tier 3 Full Committee trigger." },
   ]},
+  "Booking Policy Exception — Pre-Close": { sections: [
+    { source:"Alianza Booking Definition Policy (Jan 1, 2026)", ref:"General rules -- Booking requirements", text:"A booking must be a legally binding commitment from a customer to purchase product(s) and/or service(s) from the Company. If an agreement contains cancellation or termination rights, the booking amount and/or booking period shall be limited to the portion of the commitment that is non-cancellable and enforceable." },
+    { source:"Alianza Booking Definition Policy (Jan 1, 2026)", ref:"General rules -- Term limits", text:"Unless expressly approved by Deals Desk and Finance, no booking may exceed a total committed term of six (6) years." },
+    { source:"Alianza Booking Definition Policy (Jan 1, 2026)", ref:"Subscription and SaaS licenses", text:"The maximum booking is 6 years. In the event a customer commits to a minimum revenue commitment, a plan participant will receive 100% booking credits on bookings under the applicable conditions." },
+    { source:"ICC Charter v1.1", ref:"Section 4 -- Jurisdiction, Tier 2 Triggers", text:"Booking policy exceptions where the payout delta is under $50,000 are Tier 2 CGO pre-approval matters. Exceptions exceeding $50,000 payout impact require full Committee review." },
+  ]},
+  "Booking Policy Exception — Post-Close": { sections: [
+    { source:"Alianza Booking Definition Policy (Jan 1, 2026)", ref:"General rules -- Booking requirements", text:"A booking must be a legally binding commitment from a customer to purchase product(s) and/or service(s) from the Company. If an agreement contains cancellation or termination rights, the booking amount and/or booking period shall be limited to the portion of the commitment that is non-cancellable and enforceable." },
+    { source:"Alianza Booking Definition Policy (Jan 1, 2026)", ref:"De-booking -- Finance authority", text:"De-booking is a Finance call. Finance can initiate a de-booking. Sales Ops to seek Finance approval including the reasoning on the deal note." },
+    { source:"2026 1H Incentive Compensation Plan", ref:"Section 8 -- Overpayment Recovery", text:"In the event that an employee receives an overpayment in compensation due to administrative error, system issue, de-booking, or any other reason, the Company reserves the right to recover the overpaid amount at the rate it was paid." },
+    { source:"ICC Charter v1.1", ref:"Section 4 -- Jurisdiction, Tier 2 Triggers", text:"Post-close booking policy exceptions where the payout delta is under $50,000 are Tier 2 CGO pre-approval matters. Exceptions exceeding $50,000 payout impact require full Committee review." },
+  ]},
 };
 
 function genRef(t) {
@@ -94,11 +108,19 @@ function appendAudit(c, action) {
   const existing = c.auditLog||[];
   return { auditLog: [...existing, entry] };
 }
-function classifyLocal(trigger, dealValue) {
+function classifyLocal(trigger, dealValue, payoutDelta) {
   const val = parseFloat(String(dealValue).replace(/[^0-9.]/g,""))||0;
+  const delta = parseFloat(String(payoutDelta||"0").replace(/[^0-9.]/g,""))||0;
+  // Mandatory Tier 3 triggers
   if (["Rep-Filed Dispute","Windfall Attainment (250%+)","De-booking > $250,000","Deal >= 50% of Rep's Quota"].includes(trigger)||val>250000)
-    return {tier:3, note:"Mandatory Tier 3 trigger -- Full Committee review required."};
-  return {tier:2, note:"Nature-of-decision trigger -- CGO pre-approval required. Payout impact must be under $50k and within CGO budget."};
+    return {tier:3, note:"Mandatory Tier 3 trigger — Full Committee review required."};
+  // Booking Policy Exception: Tier 2 unless payout delta exceeds $50k
+  if (trigger==="Booking Policy Exception — Pre-Close"||trigger==="Booking Policy Exception — Post-Close") {
+    if(delta>50000)
+      return {tier:3, note:"Booking policy exception with payout delta over $50,000 — escalated to Tier 3 Full Committee review."};
+    return {tier:2, note:"Booking policy exception — CGO pre-approval required. Payout delta must be under $50,000."};
+  }
+  return {tier:2, note:"CGO pre-approval required. Payout impact must be under $50k and within CGO budget."};
 }
 function drTemplate(c, inf, ag) {
   var planSections = "";
@@ -333,17 +355,19 @@ function downloadDecisionPDF(c) {
   html.push("<div class='footer'><span>Alianza Confidential -- ICC Archive</span><span>"+c.ref+"</span></div>");
   html.push("</div></body></html>");
 
+  // Add print-on-load script so user can Save as PDF from print dialog
+  html.push(`<script>window.onload=function(){setTimeout(function(){window.print();},500);};</script>`);
+  html.push("</div></body></html>");
+
+  const lastName = c.participant ? c.participant.trim().split(" ").pop() : "";
+  const namePart = lastName ? " -- "+lastName : "";
   const blob = new Blob([html.join("")], {type:"text/html"});
   const url = URL.createObjectURL(blob);
-  const filename = c.ref+" -- Decision Record.html";
-  // Use anchor download to preserve filename — avoids blob URL as tab title
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){URL.revokeObjectURL(url);}, 2000);
+  const win = window.open(url, "_blank");
+  if(win) {
+    win.document.title = c.ref+namePart+" -- Decision Record";
+    setTimeout(function(){URL.revokeObjectURL(url);}, 30000);
+  }
 }
 
 const API = "https://icc-portal-api-anh3fnfabvfreabs.centralus-01.azurewebsites.net/api";
@@ -981,7 +1005,7 @@ function CEOAppealModal({c, onClose, onSave}) {
         <SBar label="Ground(s) for Appeal *"/>
         {APPEAL_GROUNDS.map(function(g){return(
           <div key={g.id} className="equity-check" style={{cursor:"pointer",borderColor:grounds.includes(g.id)?"#1072ba":"#dce6f0",background:grounds.includes(g.id)?"#e8f4fc":"white"}} onClick={function(){toggleGround(g.id);}}>
-            <input type="checkbox" checked={grounds.includes(g.id)} onChange={function(){toggleGround(g.id);}} style={{marginTop:2,accentColor:"#1072ba",width:16,height:16,flexShrink:0}}/>
+            <input type="checkbox" checked={grounds.includes(g.id)} onChange={function(){}} onClick={function(e){e.stopPropagation();toggleGround(g.id);}} style={{marginTop:2,accentColor:"#1072ba",width:16,height:16,flexShrink:0,cursor:"pointer"}}/>
             <div>
               <div style={{fontSize:13,fontWeight:700,color:"#17477e",marginBottom:2}}>{g.label}</div>
               <div className="equity-check-text">{g.desc}</div>
